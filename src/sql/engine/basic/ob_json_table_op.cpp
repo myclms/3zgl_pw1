@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_ENG
+#include "sql/engine/basic/file_sql_reader.h"
 #include "ob_json_table_op.h"
 #include "sql/engine/expr/ob_expr_multi_mode_func_helper.h"
 #include "sql/engine/expr/ob_expr_json_value.h"
@@ -605,6 +606,10 @@ int ObJsonTableOp::inner_rescan()
   if (OB_FAIL(ret)) {
   } else if (OB_FAIL(reset_variable())) {
   }
+  if (OB_SUCC(ret) && file_reader_ && !file_reader_->rewind()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_reader_->error.c_str());
+  }
   return ret;
 }
 
@@ -685,6 +690,9 @@ int ObJsonTableOp::init()
 int ObJsonTableOp::inner_close()
 {
   INIT_SUCC(ret);
+  if (file_reader_) { file_reader_->~Reader(); allocator_->free(file_reader_); file_reader_ = nullptr; }
+  file_checked_ = false;
+
   if (OB_NOT_NULL(root_)) {
     if (OB_FAIL(root_->reset(&jt_ctx_))) {
     }
@@ -722,6 +730,7 @@ void ScanNode::reset_reg_columns(JtScanCtx* ctx)
 
 void ObJsonTableOp::destroy()
 {
+  if (file_reader_) { file_reader_->~Reader(); allocator_->free(file_reader_); file_reader_ = nullptr; }
   ObOperator::destroy();
 }
 
@@ -1398,9 +1407,101 @@ int UnionNode::get_next_row(void* in, JtScanCtx* ctx, bool& is_null_value)
 }
 
 // json/xml table function inner
+int ObJsonTableOp::init_file_reader()
+{
+  int ret = OB_SUCCESS;
+  if (!file_checked_) {
+    ObDatum *datum = nullptr;
+    ObExpr *source = MY_SPEC.value_exprs_.at(0);
+    if (OB_FAIL(source->eval(eval_ctx_, datum))) {
+    } else if (datum->is_null() || !ob_is_string_type(source->datum_meta_.type_)) {
+    } else {
+      ObEvalCtx::TempAllocGuard guard(eval_ctx_);
+      MultimodeAlloctor allocator(guard.get_allocator());
+      ObString text;
+      if (OB_FAIL(ObTextStringHelper::read_real_string_data(ctx_, allocator, *datum,
+              source->datum_meta_, source->obj_meta_.has_lob_header(), text))) {
+      } else if (text.length() >= std::strlen(file_sql::MARKER)
+          && std::memcmp(text.ptr(), file_sql::MARKER, std::strlen(file_sql::MARKER)) == 0) {
+        bool enabled = false;
+        ObString secure;
+        file_sql::Options options;
+        std::string path, identity, schema;
+        auto *session = ctx_.get_my_session();
+        if (OB_ISNULL(session)) { ret = OB_ERR_UNEXPECTED;
+        } else if (OB_FAIL(session->get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+        } else if (!enabled) { ret = OB_NOT_SUPPORTED;
+        } else if (OB_FAIL(session->get_secure_file_priv(secure))) {
+        } else if (!file_sql::decode_config(std::string(text.ptr(),text.length()), path, options, identity, schema)) {
+          ret = OB_INVALID_ARGUMENT;
+        } else {
+          void *memory = allocator_->alloc(sizeof(file_sql::Reader));
+          if (!memory) { ret = OB_ALLOCATE_MEMORY_FAILED; }
+          else {
+            file_reader_ = new (memory) file_sql::Reader();
+            if (!file_reader_->open(path, std::string(secure.ptr(),secure.length()), options)) {
+              ret = OB_INVALID_ARGUMENT;
+              LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_reader_->error.c_str());
+            } else if (file_reader_->fingerprint() != identity || file_sql::schema_signature(file_reader_->columns) != schema) {
+              ret = OB_INVALID_ARGUMENT;
+              LOG_USER_ERROR(OB_INVALID_ARGUMENT, "file SQL input or schema changed; prepare the query again");
+            } else {
+              std::vector<bool> projection(file_reader_->columns.size(), false);
+              for (int64_t i = 0; i < MY_SPEC.cols_def_.count(); ++i) {
+                ObString path = MY_SPEC.cols_def_.at(i)->path_;
+                if (path.length() > 3 && std::memcmp(path.ptr(), "$.c", 3) == 0) {
+                  std::string index(path.ptr() + 3,path.length() - 3);
+                  char *end = nullptr; long col = std::strtol(index.c_str(), &end, 10);
+                  if (end == index.c_str() + index.size() && col >= 0 && col < projection.size()) { projection[col] = true; }
+                }
+              }
+              file_reader_->set_projection(projection);
+            }
+          }
+        }
+      }
+    }
+    if (OB_SUCC(ret)) { file_checked_ = true; }
+  }
+  return ret;
+}
+
+int ObJsonTableOp::next_file_row()
+{
+  int ret = OB_SUCCESS;
+  std::string row;
+  int status = file_reader_->next_json(row);
+  if (status == 1) { ret = OB_ITER_END; }
+  else if (status < 0) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_reader_->error.c_str());
+  } else if (OB_FAIL(root_->reset(&jt_ctx_))) {
+  } else {
+    // The JSON_TABLE column conversion machinery consumes one bounded record.
+    // No file-sized JSON array or intermediate table is constructed.
+    jt_ctx_.row_alloc_.reuse();
+    clear_evaluated_flag(); reset_columns();
+    MultimodeAlloctor allocator(jt_ctx_.row_alloc_);
+    ObIJsonBase *input = nullptr;
+    ObString text(row.size(), row.data());
+    if (OB_FAIL(ObJsonBaseFactory::get_json_base(&allocator, text, ObJsonInType::JSON_TREE,
+            ObJsonInType::JSON_TREE, input, ObJsonParser::JSN_DEFAULT_FLAG,
+            ObJsonExprHelper::get_json_max_depth_config()))) {
+    } else {
+      input_ = input;
+      bool is_null = false;
+      ret = root_->get_next_row(input_, &jt_ctx_, is_null);
+    }
+  }
+  return ret;
+}
+
 int ObJsonTableOp::inner_get_next_row()
 {
   INIT_SUCC(ret);
+  if (OB_FAIL(init_file_reader())) { return ret; }
+  if (file_reader_) { return next_file_row(); }
+
   bool is_root_null = false;
   if (!(jt_ctx_.is_json_table_func()
         || jt_ctx_.is_unnest_table_func())) {

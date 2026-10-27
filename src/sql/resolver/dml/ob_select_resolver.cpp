@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/engine/basic/file_sql_reader.h"
 #include "sql/resolver/dml/ob_select_resolver.h"
 #include "sql/resolver/dml/ob_del_upd_resolver.h"
 #include "share/ob_time_utility2.h"
@@ -3048,6 +3049,57 @@ int ObSelectResolver::resolve_into_outfile_without_format(const ParseNode *node,
                                                           ObSelectIntoItem &into_item)
 {
   int ret = OB_SUCCESS;
+  if (node->value_ == 9002 && node->num_child_ == 2) {
+    using namespace file_sql;
+    bool enabled = false;
+    ObObj path_object;
+    if (OB_FAIL(session_info_->get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+    } else if (!enabled) { ret = OB_NOT_SUPPORTED; LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL COPY is disabled");
+    } else if (OB_FAIL(resolve_into_const_node(node->children_[0], path_object))) {
+    } else {
+      Options options; options.header = false;
+      std::set<std::string> assigned;
+      const ParseNode *list = node->children_[1];
+      for (int64_t i = 0; OB_SUCC(ret) && list && i < list->num_child_; ++i) {
+        const ParseNode *arg = list->children_[i];
+        if (!arg || arg->num_child_ != 2 || !arg->children_[0] || !arg->children_[1]) { ret = OB_INVALID_ARGUMENT; break; }
+        const ParseNode *key_node = arg->children_[0], *value = arg->children_[1];
+        std::string key = lower(std::string(key_node->str_value_,key_node->str_len_));
+        std::string text = value->str_value_ ? std::string(value->str_value_,value->str_len_) : "";
+        if (!assigned.insert(key).second) { ret = OB_INVALID_ARGUMENT; }
+        else if (key == "header" && (value->type_ == T_BOOL || value->type_ == T_INT)) { options.header = value->value_ != 0; }
+        else if (key == "format" && lower(text) == "csv") {
+        } else if (key == "nullstr" && (value->type_ == T_VARCHAR || value->type_ == T_CHAR)) { options.nullstr = text; }
+        else if ((key == "delimiter" || key == "delim" || key == "sep" || key == "quote" || key == "escape") && text.size() == 1) {
+          if (key == "quote") { options.quote = text[0]; }
+          else if (key == "escape") { options.escape = text[0]; }
+          else { options.delimiter = text[0]; }
+        } else { ret = OB_INVALID_ARGUMENT; }
+      }
+      if (OB_SUCC(ret)) {
+        ObString path = path_object.get_string();
+        std::string config = std::string(COPY_MARKER) + "{\"path\":" + json_string(std::string(path.ptr(),path.length()))
+            + ",\"header\":" + (options.header ? "true" : "false")
+            + ",\"delimiter\":" + std::to_string(static_cast<unsigned char>(options.delimiter))
+            + ",\"quote\":" + std::to_string(static_cast<unsigned char>(options.quote))
+            + ",\"escape\":" + std::to_string(static_cast<unsigned char>(options.escape))
+            + ",\"nullstr\":" + json_string(options.nullstr) + ",\"names\":[";
+        auto *stmt = get_select_stmt();
+        for (int64_t i = 0; i < stmt->get_select_item_size(); ++i) {
+          if (i) { config += ','; }
+          const auto &item = stmt->get_select_item(i);
+          ObString name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+          config += json_string(std::string(name.ptr(),name.length()));
+        }
+        config += "]}";
+        ObString stored;
+        if (OB_FAIL(ob_write_string(*allocator_,ObString(config.size(),config.data()),stored))) {
+        } else { into_item.outfile_name_.set_varchar(stored); into_item.is_single_ = true; }
+      }
+    }
+    return ret;
+  }
+
   if (node->num_child_ != 5) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(resolve_into_const_node(node->children_[0], into_item.outfile_name_))) {

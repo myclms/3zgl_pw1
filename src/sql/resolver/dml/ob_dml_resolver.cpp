@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX SQL_RESV
 #include "config_bridge.h"
 #include "ob_dml_resolver.h"
+#include "sql/engine/basic/file_sql_reader.h"
 #include "sql/resolver/dml/ob_view_table_resolver.h"
 #include "sql/optimizer/ob_optimizer_util.h"
 #include "sql/resolver/dml/ob_default_value_utils.h"
@@ -3766,9 +3767,133 @@ int ObDMLResolver::resolve_hybrid_search_item(const ParseNode &parse_tree, Table
   return ret;
 }
 
+namespace {
+std::string file_sql_node_text(const ParseNode *node) {
+  return node && node->str_value_ ? std::string(node->str_value_, node->str_len_) : std::string();
+}
+std::string file_sql_identifier(const std::string &name) {
+  std::string quoted = "`";
+  for (char c : name) { quoted += c; if (c == '`') { quoted += c; } }
+  return quoted + '`';
+}
+int build_file_table_sql(const ParseNode &tree, ObSQLSessionInfo &session, std::string &sql,
+    std::vector<file_sql::Column> *columns = nullptr, const std::string &automatic_alias = "_file_sql") {
+  using namespace file_sql;
+  int ret = OB_SUCCESS;
+  bool enabled = false;
+  ObString secure;
+  if (OB_FAIL(session.get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+  } else if (!enabled) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled; SET enable_file_sql=ON before querying files");
+  } else if (OB_FAIL(session.get_secure_file_priv(secure))) {
+  } else if (tree.num_child_ != 3 || !tree.children_[0] || !tree.children_[1]
+             || tree.children_[1]->num_child_ < 1) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    Options options;
+    std::string function = lower(file_sql_node_text(tree.children_[0]));
+    if (function == "read_csv") { options.kind = Kind::CSV; }
+    else if (function == "read_json" || function == "read_ndjson") { options.kind = Kind::JSONL; }
+    else if (function == "read_parquet") { options.kind = Kind::PARQUET; }
+    else if (function == "glob") { options.kind = Kind::GLOB; }
+    else { ret = OB_NOT_SUPPORTED; }
+    ParseNode *args = tree.children_[1];
+    ParseNode *path_node = args->children_[0];
+    if (!path_node || (path_node->type_ != T_VARCHAR && path_node->type_ != T_CHAR)) { ret = OB_INVALID_ARGUMENT; }
+    std::string path = file_sql_node_text(path_node);
+    std::set<std::string> assigned;
+    for (int64_t i = 1; OB_SUCC(ret) && i < args->num_child_; ++i) {
+      ParseNode *arg = args->children_[i];
+      if (!arg || arg->type_ != T_OP_EQ || arg->num_child_ != 2 || !arg->children_[0] || !arg->children_[1]) {
+        ret = OB_ERR_PARSE_SQL;
+      } else {
+        ParseNode *name = arg->children_[0], *value = arg->children_[1];
+        if (name->type_ == T_COLUMN_REF && name->num_child_ == 3) { name = name->children_[2]; }
+        std::string key = lower(file_sql_node_text(name));
+        std::string text = file_sql_node_text(value);
+        if (!assigned.insert(key).second) { ret = OB_INVALID_ARGUMENT; }
+        else if (key == "sample_size") {
+          bool all = value->type_ == T_INT && value->value_ == -1;
+          all = all || (value->type_ == T_OP_NEG && value->num_child_ == 1
+              && value->children_[0] && value->children_[0]->type_ == T_INT && value->children_[0]->value_ == 1);
+          if (!all) { ret = OB_NOT_SUPPORTED; LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL requires sample_size=-1"); }
+        } else if (key == "header" && options.kind == Kind::CSV) {
+          if (value->type_ == T_BOOL || value->type_ == T_INT) { options.header = value->value_ != 0; }
+          else { ret = OB_INVALID_ARGUMENT; }
+        } else if ((key == "delim" || key == "delimiter" || key == "sep" || key == "quote" || key == "escape") && options.kind == Kind::CSV) {
+          if ((value->type_ != T_VARCHAR && value->type_ != T_CHAR) || text.size() != 1) { ret = OB_INVALID_ARGUMENT; }
+          else if (key == "quote") { options.quote = text[0]; }
+          else if (key == "escape") { options.escape = text[0]; }
+          else { options.delimiter = text[0]; }
+        } else if (key == "nullstr" && options.kind == Kind::CSV) {
+          if (value->type_ != T_VARCHAR && value->type_ != T_CHAR) { ret = OB_INVALID_ARGUMENT; }
+          else { options.nullstr = text; }
+        } else if (key == "format" && options.kind == Kind::JSONL && lower(text) == "newline_delimited") {
+        } else { ret = OB_INVALID_ARGUMENT; }
+      }
+    }
+    if (OB_SUCC(ret) && (options.delimiter == options.quote || options.delimiter == '\0'
+        || options.delimiter == '\n' || options.delimiter == '\r')) { ret = OB_INVALID_ARGUMENT; }
+    if (OB_SUCC(ret)) {
+      Reader reader;
+      if (!reader.open(path, std::string(secure.ptr(),secure.length()), options)) {
+        ret = OB_INVALID_ARGUMENT;
+        LOG_USER_ERROR(OB_INVALID_ARGUMENT, reader.error.c_str());
+      } else {
+        if (columns) { *columns = reader.columns; }
+        std::string config = encode_config(path, options, reader.fingerprint(), reader.columns);
+        const char *hex = "0123456789abcdef";
+        sql = "SELECT * FROM JSON_TABLE(CONVERT(X'";
+        for (unsigned char c : config) { sql += hex[c >> 4]; sql += hex[c & 15]; }
+        sql += "' USING utf8mb4), '$' COLUMNS (";
+        for (size_t i = 0; i < reader.columns.size(); ++i) {
+          if (i) { sql += ','; }
+          sql += file_sql_identifier(reader.columns[i].name) + " " + sql_type(reader.columns[i].type)
+              + " PATH '$.c" + std::to_string(i) + "' ERROR ON ERROR";
+        }
+        std::string alias = tree.children_[2] ? file_sql_node_text(tree.children_[2]) : automatic_alias;
+        sql += ")) " + file_sql_identifier(alias);
+      }
+    }
+  }
+  return ret;
+}
+}
+
+int infer_file_table_columns(const ParseNode &tree, ObSQLSessionInfo &session,
+    std::vector<file_sql::Column> &columns)
+{
+  std::string unused;
+  return build_file_table_sql(tree, session, unused, &columns);
+}
+
 int ObDMLResolver::resolve_json_table_item(const ParseNode &parse_tree, TableItem *&tbl_item)
 {
   int ret = OB_SUCCESS;
+  if (parse_tree.value_ == 9001 && parse_tree.num_child_ == 3) {
+    std::string generated;
+    ObString automatic_alias;
+    if (OB_FAIL(get_stmt()->generate_json_table_name(*allocator_, automatic_alias))) {
+    } else if (OB_FAIL(build_file_table_sql(parse_tree, *session_info_, generated, nullptr,
+            std::string(automatic_alias.ptr(),automatic_alias.length())))) {
+    } else {
+      ParseResult parsed;
+      ObParser parser(*allocator_, session_info_->get_sql_mode(), session_info_->get_charsets4parser());
+      ObString text(generated.size(), generated.data());
+      if (OB_FAIL(parser.parse(text, parsed))) {
+      } else if (!parsed.result_tree_ || !parsed.result_tree_->children_[0]
+          || !parsed.result_tree_->children_[0]->children_[PARSE_SELECT_FROM]) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        ParseNode *from = parsed.result_tree_->children_[0]->children_[PARSE_SELECT_FROM];
+        if (from->num_child_ != 1 || !from->children_[0]) { ret = OB_ERR_UNEXPECTED; }
+        else { ret = resolve_json_table_item(*from->children_[0], tbl_item); }
+      }
+    }
+    return ret;
+  }
+
   ObDMLStmt *stmt = get_stmt();
   ObRawExpr *json_doc_expr = NULL;
   TableItem *item = NULL;

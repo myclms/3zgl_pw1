@@ -28,6 +28,7 @@ namespace oceanbase
 {
 namespace sql
 {
+namespace file_sql { class CsvWriter; }
 class ObSelectIntoOpInput : public ObOpInput
 {
   OB_UNIS_VERSION_V(1);
@@ -100,6 +101,8 @@ class ObSelectIntoOp : public ObOperator
 public:
   ObSelectIntoOp(ObExecContext &exec_ctx, const ObOpSpec &spec, ObOpInput *input)
     : ObOperator(exec_ctx, spec, input),
+      copy_writer_(nullptr),
+      copy_done_(false),
       top_limit_cnt_(INT64_MAX),
       is_first_(true),
       field_str_(),
@@ -264,6 +267,11 @@ private:
   bool file_need_split(int64_t file_size);
 
 private:
+  int init_copy_writer();
+  int write_copy_row();
+  int execute_copy(bool batch, int64_t max_rows);
+  file_sql::CsvWriter *copy_writer_;
+  bool copy_done_;
   int64_t top_limit_cnt_;
   bool is_first_;
   ObObj field_str_;

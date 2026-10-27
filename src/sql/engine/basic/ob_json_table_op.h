@@ -33,6 +33,7 @@ namespace oceanbase
 {
 namespace sql
 {
+namespace file_sql { class Reader; }
 struct JtScanCtx;
 class ObExpr;
 struct JtScanCtx;
@@ -195,6 +196,8 @@ public:
       is_evaled_(false),
       root_(nullptr),
       input_(nullptr),
+      file_reader_(nullptr),
+      file_checked_(false),
       j_null_(),
       j_arr_(allocator_),
       j_obj_(allocator_)
@@ -220,6 +223,8 @@ public:
 
 private:
   int init();
+  int init_file_reader();
+  int next_file_row();
   int reset_variable();  // reset var in rescan 
   int init_data_obj(); // allocate data_ array
   int generate_column_trees(JtColTreeNode*& root);
@@ -243,6 +248,8 @@ public:
   void reset_columns();
 
 private:
+  file_sql::Reader *file_reader_;
+  bool file_checked_;
   ObJsonNull j_null_;
   ObJsonArray j_arr_;
   ObJsonObject j_obj_;

@@ -17,6 +17,12 @@
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/ddl/ob_explain_resolver.h"
 #include "sql/resolver/ob_resolver.h"
+#include "sql/parser/ob_parser.h"
+#include "sql/engine/basic/file_sql_reader.h"
+
+namespace oceanbase { namespace sql {
+int infer_file_table_columns(const ParseNode &, ObSQLSessionInfo &, std::vector<file_sql::Column> &);
+}}
 
 using namespace oceanbase;
 using namespace sql;
@@ -29,6 +35,47 @@ const static int64_t EXPLAIN_CHILD_STMT = 4;
 int ObExplainResolver::resolve(const ParseNode &parse_tree)
 {
   int ret = OB_SUCCESS;
+  if (parse_tree.num_child_ == 5 && parse_tree.children_[EXPLAIN_FORMAT]
+      && parse_tree.children_[EXPLAIN_FORMAT]->type_ == T_INT
+      && parse_tree.children_[EXPLAIN_FORMAT]->value_ == 9003) {
+    ParseNode *query = parse_tree.children_[EXPLAIN_CHILD_STMT];
+    ParseNode *from = query ? query->children_[PARSE_SELECT_FROM] : nullptr;
+    ParseNode *project = query ? query->children_[PARSE_SELECT_SELECT] : nullptr;
+    if (from && from->num_child_ == 1 && from->children_[0]
+        && from->children_[0]->type_ == T_JSON_TABLE_EXPRESSION && from->children_[0]->value_ == 9001
+        && project && project->num_child_ == 1 && project->children_[0]
+        && project->children_[0]->num_child_ == 1 && project->children_[0]->children_[0]
+        && project->children_[0]->children_[0]->type_ == T_STAR) {
+      std::vector<file_sql::Column> columns;
+      if (OB_FAIL(infer_file_table_columns(*from->children_[0],*session_info_,columns))) { return ret; }
+      auto literal = [](const std::string &value) {
+        const char *hex = "0123456789abcdef";
+        std::string sql = "CONVERT(X'";
+        for (unsigned char c : value) { sql += hex[c >> 4]; sql += hex[c & 15]; }
+        return sql + "' USING utf8mb4)";
+      };
+      std::string sql;
+      for (size_t i = 0; i < columns.size(); ++i) {
+        if (i) { sql += " UNION ALL "; }
+        std::string type = file_sql::sql_type(columns[i].type);
+        if (columns[i].type == file_sql::Type::DATETIME) { type = "DATETIME"; }
+        if (columns[i].type == file_sql::Type::VARCHAR || columns[i].type == file_sql::Type::NIL) { type = "VARCHAR"; }
+        sql += "SELECT " + literal(columns[i].name) + " AS column_name," + literal(type)
+            + " AS column_type," + literal(columns[i].nullable ? "YES" : "NO")
+            + " AS `null`,NULL AS `key`,NULL AS `default`,NULL AS extra";
+      }
+      ParseResult parsed;
+      ObParser parser(*allocator_,session_info_->get_sql_mode(),session_info_->get_charsets4parser());
+      ObString text(sql.size(),sql.data());
+      if (OB_FAIL(parser.parse(text,parsed))) {
+      } else if (!parsed.result_tree_ || !parsed.result_tree_->children_[0]) { ret = OB_ERR_UNEXPECTED;
+      } else {
+        ObResolver resolver(params_);
+        ret = resolver.resolve(ObResolver::IS_NOT_PREPARED_STMT,*parsed.result_tree_->children_[0],stmt_);
+      }
+      return ret;
+    }
+  }
   ObExplainStmt *explain_stmt = NULL;
   if (!(T_EXPLAIN == parse_tree.type_  && 5 == parse_tree.num_child_)) {
     ret = OB_ERR_UNEXPECTED;
@@ -65,6 +112,7 @@ int ObExplainResolver::resolve(const ParseNode &parse_tree)
       } else {
         explain_stmt->set_explain_query_stmt(static_cast<ObDMLStmt *>(child_stmt));
         ParseNode *format = parse_tree.children_[EXPLAIN_FORMAT];
+        if (format && format->type_ == T_INT && format->value_ == 9003) { format = nullptr; }
         if (NULL != format) {
           switch (format->type_) {
           case T_OUTLINE:

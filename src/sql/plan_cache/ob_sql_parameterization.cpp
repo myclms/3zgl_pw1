@@ -2098,6 +2098,11 @@ int ObSqlParameterization::mark_tree(ParseNode *tree ,SqlInfo &sql_info)
       if (OB_FAIL(mark_args(tree, mark_arr, ARGS_NUMBER_SEVEN, sql_info))) {
       }
     }
+  } else if (T_JSON_TABLE_EXPRESSION == tree->type_ && tree->value_ == 9001 && tree->num_child_ == 3) {
+    // File paths and options determine the dynamic row type and must remain
+    // constants in the cached plan, just like JSON_TABLE column declarations.
+    tree->is_tree_not_param_ = true;
+    sql_info.ps_need_parameterized_ = false;
   } else if (T_JSON_TABLE_EXPRESSION == tree->type_) {
     if (5 != tree->num_child_) {
       ret = OB_INVALID_ARGUMENT;
