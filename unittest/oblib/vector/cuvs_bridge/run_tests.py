@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='bridge-test-', dir=output) as tmp:
     source = root / 'tools/hipvs_bridge/seekdb_cuvs_bridge.c'
     if args.baseline:
         source = tmp / 'baseline.c'
-        source.write_bytes(subprocess.check_output(['git', 'show', '08c76418a8e1fef3c1aae83010658ff56a4faa57:tools/hipvs_bridge/seekdb_cuvs_bridge.c'], cwd=root))
+        source.write_bytes(subprocess.check_output(['git', 'show', '634888d9b037153fa143d2c913ba4b25503e1d62:tools/hipvs_bridge/seekdb_cuvs_bridge.c'], cwd=root))
     flags = ['-O2', '-Wall', '-Wextra', '-Werror', '-pthread', '-D__HIP_PLATFORM_AMD__', '-I'+str(here/'stubs'), '-I'+str(root/'tools/hipvs_bridge')]
     if args.sanitize:
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='bridge-test-', dir=output) as tmp:
     record['commands'].append({'command': cpp_command, 'returncode': cpp_result.returncode, 'stderr': cpp_result.stderr})
     if cpp_result.returncode:
         raise SystemExit(cpp_result.stderr)
-    executed = subprocess.run([str(exe), *(['reuse-only'] if args.baseline else [])], capture_output=True, text=True, timeout=120)
+    executed = subprocess.run([str(exe), *(['reuse-only'] if args.baseline else [])], cwd=tmp, capture_output=True, text=True, timeout=120)
     record.update(returncode=executed.returncode, stdout=executed.stdout, stderr=executed.stderr,
                   expectation='baseline_reuse_test_must_fail' if args.baseline else 'all_mock_cases_must_pass')
     record['passed'] = executed.returncode != 0 if args.baseline else executed.returncode == 0

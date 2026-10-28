@@ -75,13 +75,46 @@ static int retention_bound(void){
   CHECK(seekdb_cuvs_search(h,q,count,1,ids,dist)==0);CHECK(ids[0]==0&&ids[count-1]==0);CHECK(mock_stats().live_bytes==0);
   free(q);free(ids);free(dist);CHECK(query_ok(h)==0);seekdb_cuvs_free(h);CHECK(clean());return 0;
 }
+static int v5_large_topk(void){
+  float vectors[400];for(int i=0;i<200;i++){vectors[i*2]=(float)i;vectors[i*2+1]=0;}
+  void *h=seekdb_cuvs_build(vectors,200,2);CHECK(h);float q[]={0,0};unsigned ids[150];float distances[150];
+  CHECK(seekdb_cuvs_search(h,q,1,150,ids,distances)==0);CHECK(ids[149]==149);
+  CHECK(mock_stats().last_itopk_size==600&&mock_stats().last_search_width==4);
+  CHECK(seekdb_cuvs_search(h,q,1,100,ids,distances)==0);CHECK(ids[99]==99);
+  CHECK(mock_stats().last_itopk_size==512);
+  CHECK(seekdb_cuvs_search(h,q,1,10,ids,distances)==0);CHECK(ids[9]==9&&mock_stats().last_itopk_size==512);
+  seekdb_cuvs_free(h);CHECK(clean());return 0;
+}
+static int snapshot_lifecycle(void){
+  const char *path="index.mock";void *h=seekdb_cuvs_build(base,4,2);CHECK(h);
+  CHECK(seekdb_cuvs_serialize(NULL,path)!=0);CHECK(seekdb_cuvs_serialize(h,NULL)!=0);CHECK(seekdb_cuvs_serialize(h,"")!=0);
+  CHECK(cudaSetDevice(1)==cudaSuccess);CHECK(seekdb_cuvs_serialize(h,path)==0);
+  int device=0;cudaGetDevice(&device);CHECK(device==1);CHECK(query_ok(h)==0);
+  mock_fail_next(MOCK_SERIALIZE);CHECK(seekdb_cuvs_serialize(h,path)!=0);CHECK(query_ok(h)==0);
+  mock_fail_next(MOCK_SYNC);CHECK(seekdb_cuvs_serialize(h,path)!=0);CHECK(query_ok(h)==0);
+  mock_fail_next(MOCK_DEVICE);CHECK(seekdb_cuvs_serialize(h,path)!=0);CHECK(query_ok(h)==0);
+  CHECK(seekdb_cuvs_serialize(h,"missing-directory/index.mock")!=0);
+  seekdb_cuvs_free(h);CHECK(clean());cudaSetDevice(0);
+  CHECK(seekdb_cuvs_deserialize(NULL,4,2)==NULL);CHECK(seekdb_cuvs_deserialize("",4,2)==NULL);
+  CHECK(seekdb_cuvs_deserialize(path,0,2)==NULL);CHECK(seekdb_cuvs_deserialize(path,4,0)==NULL);
+  CHECK(seekdb_cuvs_deserialize("missing.mock",4,2)==NULL);CHECK(clean());
+  CHECK(seekdb_cuvs_deserialize(path,3,2)==NULL);CHECK(seekdb_cuvs_deserialize(path,4,3)==NULL);CHECK(clean());
+  enum MockFailure failures[]={MOCK_RESOURCE,MOCK_STREAM_CREATE,MOCK_STREAM_SET,MOCK_INDEX_PARAMS,MOCK_SEARCH_PARAMS,MOCK_INDEX,MOCK_DESERIALIZE,MOCK_SYNC,MOCK_GET_SIZE,MOCK_GET_DIMS};
+  for(size_t i=0;i<sizeof(failures)/sizeof(failures[0]);i++){mock_fail_next(failures[i]);CHECK(seekdb_cuvs_deserialize(path,4,2)==NULL);CHECK(clean());}
+  FILE *bad=fopen("truncated.mock","wb");CHECK(bad);CHECK(fputc(1,bad)!=EOF);CHECK(fclose(bad)==0);
+  CHECK(seekdb_cuvs_deserialize("truncated.mock",4,2)==NULL);CHECK(clean());
+  h=seekdb_cuvs_deserialize(path,4,2);CHECK(h);CHECK(query_ok(h)==0);
+  MockStats first=mock_stats();CHECK(query_ok(h)==0);CHECK(first.allocations==mock_stats().allocations);
+  seekdb_cuvs_free(h);CHECK(clean());CHECK(remove(path)==0);CHECK(remove("truncated.mock")==0);return 0;
+}
 int main(int argc,char **argv){
   if(argc>1&&strcmp(argv[1],"reuse-only")==0)return reuse_case();
   struct { const char *name; int (*run)(void); } tests[]={
     {"reuse_same_shape",reuse_case},{"async_completion_and_shapes",ready_and_shapes},
     {"invalid_arguments",invalid_arguments},{"partial_initialization_cleanup",initialization_failures},
     {"copy_search_sync_allocation_failures",search_failures},{"index_isolation",independent_handles},
-    {"concurrent_same_handle",concurrent_queries},{"bounded_workspace_retention",retention_bound}};
+    {"concurrent_same_handle",concurrent_queries},{"bounded_workspace_retention",retention_bound},
+    {"v5_large_topk_quality_settings",v5_large_topk},{"snapshot_roundtrip_and_failure_cleanup",snapshot_lifecycle}};
   for(size_t i=0;i<sizeof(tests)/sizeof(tests[0]);i++){if(tests[i].run())return 1;printf("PASS %s\n",tests[i].name);}
-  printf("MOCK_ONLY: real_gpu=false; cases=8; GPU quality/performance NOT measured\n");return 0;
+  printf("MOCK_ONLY: real_gpu=false; cases=10; GPU quality/performance NOT measured\n");return 0;
 }

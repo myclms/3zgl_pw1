@@ -2,11 +2,11 @@
 #include <assert.h>
 #include <float.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct MockIndex { float *base; long n, dim; };
-struct MockParams { int unused; };
 typedef struct Op {
   int kind; struct Op *next; void *dst; const void *src; size_t bytes;
   struct MockIndex *index; long nq, dim, k; unsigned *ids; float *dist;
@@ -92,17 +92,44 @@ cuvsError_t cuvsRMMFree(cuvsResources_t res,void *ptr,size_t bytes){
 }
 cuvsError_t cuvsCagraIndexParamsCreate(cuvsCagraIndexParams_t *p){if(failed(MOCK_INDEX_PARAMS))return CUVS_ERROR;*p=(struct MockParams*)calloc(1,sizeof(**p));assert(*p);stats.params_live++;return CUVS_SUCCESS;}
 cuvsError_t cuvsCagraIndexParamsDestroy(cuvsCagraIndexParams_t p){free(p);stats.params_live--;return CUVS_SUCCESS;}
-cuvsError_t cuvsCagraSearchParamsCreate(cuvsCagraSearchParams_t *p){if(failed(MOCK_SEARCH_PARAMS))return CUVS_ERROR;*p=(struct MockParams*)calloc(1,sizeof(**p));assert(*p);stats.params_live++;stats.search_params++;return CUVS_SUCCESS;}
+cuvsError_t cuvsCagraSearchParamsCreate(cuvsCagraSearchParams_t *p){if(failed(MOCK_SEARCH_PARAMS))return CUVS_ERROR;*p=(struct MockParams*)calloc(1,sizeof(**p));assert(*p);(*p)->itopk_size=64;stats.params_live++;stats.search_params++;return CUVS_SUCCESS;}
 cuvsError_t cuvsCagraSearchParamsDestroy(cuvsCagraSearchParams_t p){free(p);stats.params_live--;return CUVS_SUCCESS;}
 cuvsError_t cuvsCagraIndexCreate(cuvsCagraIndex_t *p){if(failed(MOCK_INDEX))return CUVS_ERROR;*p=(struct MockIndex*)calloc(1,sizeof(**p));assert(*p);stats.indexes++;return CUVS_SUCCESS;}
 cuvsError_t cuvsCagraIndexDestroy(cuvsCagraIndex_t p){free(p->base);free(p);stats.indexes--;return CUVS_SUCCESS;}
 cuvsError_t cuvsCagraBuild(cuvsResources_t res,cuvsCagraIndexParams_t p,DLManagedTensor *data,cuvsCagraIndex_t idx){
-  (void)p;if(failed(MOCK_BUILD)||!data->dl_tensor.data||data->dl_tensor.shape[0]<=0||data->dl_tensor.shape[1]<=0)return CUVS_ERROR;
+  assert(p->build_algo==NN_DESCENT&&p->graph_degree==128&&p->intermediate_graph_degree==256&&p->nn_descent_niter==100);
+  if(failed(MOCK_BUILD)||!data->dl_tensor.data||data->dl_tensor.shape[0]<=0||data->dl_tensor.shape[1]<=0)return CUVS_ERROR;
   idx->n=(long)data->dl_tensor.shape[0];idx->dim=(long)data->dl_tensor.shape[1];
   Op *op=(Op*)calloc(1,sizeof(*op));assert(op);op->kind=2;op->src=data->dl_tensor.data;op->bytes=(size_t)idx->n*idx->dim*sizeof(float);op->index=idx;enqueue(((Resource*)res)->stream,op);return CUVS_SUCCESS;
 }
 cuvsError_t cuvsCagraSearch(cuvsResources_t res,cuvsCagraSearchParams_t p,cuvsCagraIndex_t idx,DLManagedTensor *q,DLManagedTensor *ids,DLManagedTensor *dist,cuvsFilter filter){
-  (void)p;(void)filter;if(failed(MOCK_SEARCH))return CUVS_ERROR;
+  (void)filter;if(failed(MOCK_SEARCH))return CUVS_ERROR;
+  assert(p->itopk_size>=(size_t)ids->dl_tensor.shape[1]&&p->itopk_size>=512&&p->search_width==4);
+  stats.last_itopk_size=p->itopk_size;stats.last_search_width=p->search_width;
   assert(q->dl_tensor.dtype.bits==32&&ids->dl_tensor.dtype.code==kDLUInt);
   Op *op=(Op*)calloc(1,sizeof(*op));assert(op);op->kind=3;op->index=idx;op->src=q->dl_tensor.data;op->nq=(long)q->dl_tensor.shape[0];op->k=(long)ids->dl_tensor.shape[1];op->ids=(unsigned*)ids->dl_tensor.data;op->dist=(float*)dist->dl_tensor.data;stats.searches++;enqueue(((Resource*)res)->stream,op);return CUVS_SUCCESS;
 }
+
+/* Test-double snapshot format, never used by the product or real hipVS. */
+cuvsError_t cuvsCagraSerialize(cuvsResources_t res,const char *filename,cuvsCagraIndex_t idx,bool include_dataset){
+  assert(include_dataset);flush(((Resource*)res)->stream);
+  if(failed(MOCK_SERIALIZE))return CUVS_ERROR;
+  FILE *file=fopen(filename,"wb");if(!file)return CUVS_ERROR;
+  int64_t shape[2]={idx->n,idx->dim};size_t count=(size_t)idx->n*idx->dim;
+  int ok=fwrite(shape,sizeof(shape),1,file)==1&&fwrite(idx->base,sizeof(float),count,file)==count;
+  if(fclose(file)!=0)ok=0;
+  return ok?CUVS_SUCCESS:CUVS_ERROR;
+}
+cuvsError_t cuvsCagraDeserialize(cuvsResources_t res,const char *filename,cuvsCagraIndex_t idx){
+  flush(((Resource*)res)->stream);if(failed(MOCK_DESERIALIZE))return CUVS_ERROR;
+  FILE *file=fopen(filename,"rb");if(!file)return CUVS_ERROR;
+  int64_t shape[2];int ok=fread(shape,sizeof(shape),1,file)==1;
+  if(!ok||shape[0]<=0||shape[0]>10000||shape[1]<=0||shape[1]>1024){fclose(file);return CUVS_ERROR;}
+  size_t count=(size_t)shape[0]*shape[1];float *data=(float*)malloc(count*sizeof(float));assert(data);
+  ok=fread(data,sizeof(float),count,file)==count;
+  if(fclose(file)!=0)ok=0;
+  if(!ok){free(data);return CUVS_ERROR;}
+  free(idx->base);idx->base=data;idx->n=(long)shape[0];idx->dim=(long)shape[1];return CUVS_SUCCESS;
+}
+cuvsError_t cuvsCagraIndexGetSize(cuvsCagraIndex_t idx,int64_t *n){if(failed(MOCK_GET_SIZE))return CUVS_ERROR;*n=idx->n;return CUVS_SUCCESS;}
+cuvsError_t cuvsCagraIndexGetDims(cuvsCagraIndex_t idx,int64_t *dim){if(failed(MOCK_GET_DIMS))return CUVS_ERROR;*dim=idx->dim;return CUVS_SUCCESS;}

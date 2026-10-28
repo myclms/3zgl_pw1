@@ -53,6 +53,10 @@ def child(args):
     lib.seekdb_cuvs_search.restype = ctypes.c_int
     lib.seekdb_cuvs_free.argtypes = [ctypes.c_void_p]
     lib.seekdb_cuvs_free.restype = None
+    lib.seekdb_cuvs_serialize.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.seekdb_cuvs_serialize.restype = ctypes.c_int
+    lib.seekdb_cuvs_deserialize.argtypes = [ctypes.c_char_p, ctypes.c_long, ctypes.c_long]
+    lib.seekdb_cuvs_deserialize.restype = ctypes.c_void_p
     ids = np.empty((1, 10), dtype=np.uint32)
     distances = np.empty_like(ids, dtype=np.float32)
     started = time.perf_counter()
@@ -60,6 +64,14 @@ def child(args):
     if not handle:
         raise RuntimeError('Real GPU CAGRA build failed; CPU fallback is not accepted')
     try:
+        snapshot = os.fsencode(args.child.with_suffix('.cagra'))
+        if lib.seekdb_cuvs_serialize(handle, snapshot):
+            raise RuntimeError('V5 GPU snapshot write failed')
+        lib.seekdb_cuvs_free(handle)
+        handle = None
+        handle = lib.seekdb_cuvs_deserialize(snapshot, len(base), base.shape[1])
+        if not handle:
+            raise RuntimeError('V5 GPU snapshot reload failed')
         rc = lib.seekdb_cuvs_search(handle, queries.ctypes.data_as(fp), 1, 10,
                                    ids.ctypes.data_as(up), distances.ctypes.data_as(fp))
         first_ms = (time.perf_counter() - started) * 1000
@@ -72,6 +84,7 @@ def child(args):
         report = {'real_amd_gpu': True, 'component_only': True,
                   'includes_sql_scan_and_cpu_vsag': False,
                   'includes_first_query_and_gpu_completion': True,
+                  'includes_bridge_snapshot_write_and_reload': True,
                   'build_and_first_query_ms': first_ms, 'gpu_fds': devices,
                   'library_sha256': hashlib.sha256(args.library.read_bytes()).hexdigest(),
                   'rows': len(base), 'dimension': base.shape[1], 'queries': len(queries),
@@ -91,7 +104,8 @@ def child(args):
                     'qps': len(queries)/(ms/1000), 'recall': recall(ids, truth, k)})
         args.child.write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
     finally:
-        lib.seekdb_cuvs_free(handle)
+        if handle:
+            lib.seekdb_cuvs_free(handle)
 
 
 def main(args):

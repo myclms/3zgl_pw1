@@ -29,6 +29,7 @@ typedef struct {
   int stream_created, device;
   pthread_mutex_t mutex;
   sk_device_buffer query, neighbors, distances;
+  size_t default_itopk_size;
   long n, dim;
 } sk_cuvs_index;
 
@@ -99,13 +100,8 @@ static void sk_destroy(sk_cuvs_index *h)
   if (h->stream_created) cudaStreamDestroy(h->stream);
 }
 
-void *seekdb_cuvs_build(const float *base, long n, long dim)
+static sk_cuvs_index *sk_create(void)
 {
-  size_t dataset_bytes;
-  int64_t shape[2] = {n, dim};
-  DLManagedTensor dataset = sk_tensor((void *)base, kDLCPU, 0, kDLFloat, shape);
-  if (base == NULL || (uint64_t)n > UINT32_MAX ||
-      sk_bytes(n, dim, sizeof(float), &dataset_bytes)) return NULL;
   sk_cuvs_index *h = (sk_cuvs_index *)calloc(1, sizeof(*h));
   if (h == NULL) return NULL;
   if (pthread_mutex_init(&h->mutex, NULL) != 0) { free(h); return NULL; }
@@ -117,8 +113,29 @@ void *seekdb_cuvs_build(const float *base, long n, long dim)
       cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS ||
       cuvsCagraSearchParamsCreate(&h->sp) != CUVS_SUCCESS ||
       cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) goto fail;
-  /* Preserve the frozen baseline's metric, degrees, build algorithm and search
-   * parameters. Do not trade recall for speed. */
+  /* Preserve the V5 frozen baseline's quality settings. */
+  h->ip->build_algo = NN_DESCENT;
+  h->ip->graph_degree = 128;
+  h->ip->intermediate_graph_degree = 256;
+  h->ip->nn_descent_niter = 100;
+  h->default_itopk_size = h->sp->itopk_size;
+  return h;
+fail:
+  sk_destroy(h);
+  pthread_mutex_destroy(&h->mutex);
+  free(h);
+  return NULL;
+}
+
+void *seekdb_cuvs_build(const float *base, long n, long dim)
+{
+  size_t dataset_bytes;
+  int64_t shape[2] = {n, dim};
+  DLManagedTensor dataset = sk_tensor((void *)base, kDLCPU, 0, kDLFloat, shape);
+  if (base == NULL || (uint64_t)n > UINT32_MAX ||
+      sk_bytes(n, dim, sizeof(float), &dataset_bytes)) return NULL;
+  sk_cuvs_index *h = sk_create();
+  if (h == NULL) return NULL;
   if (cuvsCagraBuild(h->res, h->ip, &dataset, h->idx) != CUVS_SUCCESS ||
       cuvsStreamSync(h->res) != CUVS_SUCCESS) goto fail;
   h->n = n;
@@ -161,6 +178,13 @@ int seekdb_cuvs_search(void *handle, const float *query, long nq, long topk,
     cuvsFilter filter;
     filter.type = NO_FILTER;
     filter.addr = (uintptr_t)0;
+    /* Reset for this k, rather than keeping a larger previous query's setting.
+     * V5 creates fresh parameters with max(default, 512, 4*k) and width=4. */
+    size_t required_itopk = (size_t)topk * 4;
+    if (required_itopk < 512) required_itopk = 512;
+    h->sp->itopk_size = required_itopk > h->default_itopk_size
+      ? required_itopk : h->default_itopk_size;
+    h->sp->search_width = 4;
     if (cuvsCagraSearch(h->res, h->sp, h->idx, &qt, &nt, &dt, filter) != CUVS_SUCCESS) {
       rc = 15; goto done;
     }
@@ -203,6 +227,53 @@ void seekdb_cuvs_free(void *handle)
   pthread_mutex_unlock(&h->mutex);
   pthread_mutex_destroy(&h->mutex);
   free(h);
+}
+
+int seekdb_cuvs_serialize(void *handle, const char *filename)
+{
+  sk_cuvs_index *h = (sk_cuvs_index *)handle;
+  if (h == NULL || filename == NULL || filename[0] == '\0') return 1;
+  if (pthread_mutex_lock(&h->mutex) != 0) return 2;
+  int rc = 0, previous_device = -1, device_ready = 0;
+  if (cudaGetDevice(&previous_device) != cudaSuccess ||
+      (previous_device != h->device && cudaSetDevice(h->device) != cudaSuccess)) {
+    rc = 3; goto done;
+  }
+  device_ready = 1;
+  if (cuvsStreamSync(h->res) != CUVS_SUCCESS ||
+      cuvsCagraSerialize(h->res, filename, h->idx, true) != CUVS_SUCCESS) rc = 4;
+done:
+  if (device_ready && cuvsStreamSync(h->res) != CUVS_SUCCESS && rc == 0) rc = 5;
+  if (device_ready && previous_device != h->device &&
+      cudaSetDevice(previous_device) != cudaSuccess && rc == 0) rc = 6;
+  pthread_mutex_unlock(&h->mutex);
+  return rc;
+}
+
+void *seekdb_cuvs_deserialize(const char *filename, long n, long dim)
+{
+  size_t dataset_bytes;
+  if (filename == NULL || filename[0] == '\0' || (uint64_t)n > UINT32_MAX ||
+      sk_bytes(n, dim, sizeof(float), &dataset_bytes)) return NULL;
+  sk_cuvs_index *h = sk_create();
+  if (h == NULL) return NULL;
+  if (cuvsCagraDeserialize(h->res, filename, h->idx) != CUVS_SUCCESS ||
+      cuvsStreamSync(h->res) != CUVS_SUCCESS) goto fail;
+  {
+    int64_t actual_n = 0, actual_dim = 0;
+    if (cuvsCagraIndexGetSize(h->idx, &actual_n) != CUVS_SUCCESS ||
+        cuvsCagraIndexGetDims(h->idx, &actual_dim) != CUVS_SUCCESS ||
+        actual_n != n || actual_dim != dim) goto fail;
+  }
+  h->n = n;
+  h->dim = dim;
+  return h;
+fail:
+  fprintf(stderr, "[seekdb_cuvs] deserialize failed or snapshot shape mismatch\n");
+  sk_destroy(h);
+  pthread_mutex_destroy(&h->mutex);
+  free(h);
+  return NULL;
 }
 
 int seekdb_cuvs_cagra_knn(const float *base, long n, long dim,

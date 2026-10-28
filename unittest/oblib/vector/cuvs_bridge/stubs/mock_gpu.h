@@ -3,6 +3,7 @@
 /* CPU-only ABI test doubles. These files never enter the product include path. */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +28,9 @@ cudaError_t cudaMemcpy(void *, const void *, size_t, cudaMemcpyKind);
 typedef uintptr_t cuvsResources_t;
 typedef enum { CUVS_ERROR=0, CUVS_SUCCESS=1 } cuvsError_t;
 typedef struct MockIndex *cuvsCagraIndex_t;
+enum { NN_DESCENT=1 };
+struct MockParams { int build_algo; size_t graph_degree, intermediate_graph_degree,
+  nn_descent_niter, itopk_size, search_width; };
 typedef struct MockParams *cuvsCagraIndexParams_t;
 typedef struct MockParams *cuvsCagraSearchParams_t;
 enum { NO_FILTER=0 };
@@ -47,11 +51,17 @@ cuvsError_t cuvsCagraIndexDestroy(cuvsCagraIndex_t);
 cuvsError_t cuvsCagraBuild(cuvsResources_t, cuvsCagraIndexParams_t, DLManagedTensor *, cuvsCagraIndex_t);
 cuvsError_t cuvsCagraSearch(cuvsResources_t, cuvsCagraSearchParams_t, cuvsCagraIndex_t,
   DLManagedTensor *, DLManagedTensor *, DLManagedTensor *, cuvsFilter);
+cuvsError_t cuvsCagraSerialize(cuvsResources_t, const char *, cuvsCagraIndex_t, bool);
+cuvsError_t cuvsCagraDeserialize(cuvsResources_t, const char *, cuvsCagraIndex_t);
+cuvsError_t cuvsCagraIndexGetSize(cuvsCagraIndex_t, int64_t *);
+cuvsError_t cuvsCagraIndexGetDims(cuvsCagraIndex_t, int64_t *);
 enum MockFailure { MOCK_NONE=0, MOCK_RESOURCE, MOCK_STREAM_CREATE, MOCK_STREAM_SET,
   MOCK_INDEX_PARAMS, MOCK_SEARCH_PARAMS, MOCK_INDEX, MOCK_BUILD, MOCK_ALLOC,
-  MOCK_COPY, MOCK_SEARCH, MOCK_SYNC, MOCK_DEVICE };
+  MOCK_COPY, MOCK_SEARCH, MOCK_SYNC, MOCK_DEVICE, MOCK_SERIALIZE, MOCK_DESERIALIZE,
+  MOCK_GET_SIZE, MOCK_GET_DIMS };
 typedef struct { size_t allocations, frees, live_bytes, search_params, resources,
-  indexes, params_live, streams, copies, searches, syncs; } MockStats;
+  indexes, params_live, streams, copies, searches, syncs, last_itopk_size,
+  last_search_width; } MockStats;
 MockStats mock_stats(void);
 void mock_fail_next(enum MockFailure);
 void mock_fail_copy(int);
