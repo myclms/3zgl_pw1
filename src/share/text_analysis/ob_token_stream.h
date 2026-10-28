@@ -124,7 +124,7 @@ private:
 class ObBasicEnglishNormalizer final : public ObTokenNormalizer
 {
 public:
-  ObBasicEnglishNormalizer();
+  explicit ObBasicEnglishNormalizer(common::ObIAllocator *output_allocator = nullptr);
   virtual ~ObBasicEnglishNormalizer() {};
 
   virtual void reset() override;
@@ -132,6 +132,8 @@ public:
   virtual int get_next(ObDatum &next_token, int64_t &token_freq) override;
 private:
   ObArenaAllocator norm_allocator_;
+  // Optional owner for tokens that must survive subsequent get_next() calls.
+  common::ObIAllocator *output_allocator_;
 };
 
 // group (deduplicate) and count

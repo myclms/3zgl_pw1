@@ -1,0 +1,28 @@
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+SELECT TOKENIZE('DATABASE database Database', 'beng', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 3}], "doc_len": 3}
+SELECT TOKENIZE('DATABASE database Database', 'ik', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 3}], "doc_len": 3}
+SELECT TOKENIZE('database database database', 'space', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 3}], "doc_len": 3}
+SELECT TOKENIZE('!!!  --', 'beng', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [], "doc_len": 0}
+SELECT TOKENIZE('database', 'beng') AS tokens;
+tokens
+["database"]
+SELECT TOKENIZE('performance', 'beng') AS tokens;
+tokens
+["performance"]
+SELECT TOKENIZE('database database', 'beng', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 2}], "doc_len": 2}
+SELECT TOKENIZE('cafex caféx', 'space', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"caféx": 2}], "doc_len": 2}
+SELECT TOKENIZE('caféx cafex', 'space', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"cafex": 2}], "doc_len": 2}
