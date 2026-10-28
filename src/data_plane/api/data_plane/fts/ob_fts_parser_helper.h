@@ -161,6 +161,9 @@ public:
       common::ObIAllocator *allocator,
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
+  // The caller has already validated and decoded the parser configuration.
+  int init(common::ObIAllocator *allocator, const ObFTParser &parser,
+           const ObFTParserProperty &properties);
   /**
    * Split document into multiple words
    *

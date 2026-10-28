@@ -71,3 +71,34 @@ The unchanged official benchmark ran with `ROWS=20000 BATCH=500 ROUNDS=3000 QUER
 All four reports retained hit counts `8001 / 11000 / 7332 / 20`. The raw reports are in `unittest/storage/fts/results/`.
 
 BENG index construction took 11.3% and 7.4% less time in the two pairs. SQL latency moved in both directions, including the SELECT 1 control, so these runs do not establish a stable whole-server latency improvement. Regressions are retained above. The platform must determine the competition score on its own hardware.
+
+## Follow-up after platform evaluation
+
+The platform completed commit `c5ee3180cf7986b37b91836dc1ed2bdddf48ebba` successfully but reported `fts_mean_improvement=-0.06751229347034847` and zero points. The platform's per-metric reference times were unavailable. The checked-in baseline JSON does not reproduce that score, so it must not be used to predict platform points. The follow-up comparison uses the actual submitted binary as its control.
+
+CPU sampling of real SQL identified repeated configuration processing in TOKENIZE and per-candidate expression evaluation/array access in retrieval. This revision:
+
+- Retains validated parser/configuration objects through TOKENIZE instead of formatting them as JSON and immediately parsing them again. Calls without additional arguments use the existing typed defaults directly. Explicit configurations still pass the original validation; dictionary loading remains per call.
+- Handles the exact vectorized `BOOL(double relevance)` expression directly, using the same zero/NaN behavior as `ObExprBool`. Other expressions retain the general evaluation path. Buffered output publishes complete datum arrays and evaluation flags per batch, resetting datum pointers through the existing batch-write API.
+- Accesses contiguous iterator/buffer arrays directly where indices are generated internally or have already been checked. Merge ordering, score calculation and LIMIT/OFFSET handling are unchanged.
+
+The final Linux server built successfully and the native CTest passed. `fts_index.hot_path_equivalence`, `fts_index.tokenize_function` and `fts_index.simple_query` passed on both the submitted and follow-up binaries. The expanded snapshot comparator matched complete outputs on both versions: 2,000 original TOKENIZE results, custom/default/dynamic configurations, invalid-configuration error codes, natural-language/boolean matching, compound filters, repeated relevance expressions, ranking, pagination, empty results, DML and rollback. Relevance values are compared exactly, without rounding or tolerance.
+
+Two further official benchmark pairs used the same parameters and server settings described above, with both binaries pinned to CPUs 0-3 and no compilation running. Pair A ran the optimized binary first; pair B ran the submitted binary first. Every run recreated and loaded the benchmark database. Dictionary state was warm for both optimized runs and the second submitted run; the first submitted run began after a restart. No index-construction improvement is claimed from these measurements.
+
+| Metric | A submitted | A follow-up | B submitted | B follow-up |
+| --- | ---: | ---: | ---: | ---: |
+| SELECT 1, ms | 0.1606 | 0.1625 | 0.1303 | 0.1394 |
+| Build IK title/content, s | 9.814 | 9.603 | 9.601 | 9.816 |
+| Build IK content, s | 7.989 | 7.768 | 7.767 | 7.774 |
+| Build BENG, s | 4.272 | 4.194 | 4.060 | 4.069 |
+| TOKENIZE IK, ms | 0.3023 | 0.2515 | 0.2644 | 0.2489 |
+| TOKENIZE BENG, ms | 0.1901 | 0.1693 | 0.1910 | 0.1872 |
+| MATCH Chinese, ms | 2.5166 | 2.3194 | 2.2028 | 2.3121 |
+| MATCH BENG, ms | 3.3923 | 2.7152 | 3.1542 | 3.0582 |
+| MATCH mixed, ms | 2.5527 | 2.1344 | 2.7938 | 2.1830 |
+| MATCH LIMIT, ms | 3.0320 | 3.2112 | 3.0358 | 3.1480 |
+
+IK TOKENIZE decreased 16.8% / 5.9%, BENG TOKENIZE 10.9% / 2.0%, BENG matching 20.0% / 3.0%, and mixed matching 16.4% / 21.9%. Chinese matching moved in both directions. LIMIT latency increased 5.9% / 3.7%; SELECT 1 increased 1.2% / 7.0%. These results support improvements in the targeted paths, not a consistent improvement in every query or a predicted platform score. All four reports preserved hit counts `8001 / 11000 / 7332 / 20` and are retained as `*-round2-*-report.txt` in `unittest/storage/fts/results/`.
+
+An additional CPU profile of 3,000 actual Chinese MATCH queries found no samples of `calc_bool_expr_for_double_type`, which appeared in the submitted profile. Batch projection also fell from 2.55% to 1.00% of sampled CPU. These percentages identify changed hotspots; they are not whole-query timing measurements.
