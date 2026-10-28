@@ -3849,7 +3849,7 @@ int build_file_table_sql(const ParseNode &tree, ObSQLSessionInfo &session, std::
         sql += "' USING utf8mb4), '$' COLUMNS (";
         for (size_t i = 0; i < reader.columns.size(); ++i) {
           if (i) { sql += ','; }
-          sql += file_sql_identifier(reader.columns[i].name) + " " + sql_type(reader.columns[i].type)
+          sql += file_sql_identifier(reader.columns[i].name) + " " + sql_type(reader.columns[i])
               + " PATH '$.c" + std::to_string(i) + "' ERROR ON ERROR";
         }
         std::string alias = tree.children_[2] ? file_sql_node_text(tree.children_[2]) : automatic_alias;

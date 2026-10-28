@@ -153,7 +153,10 @@ syspack_config = [
     SysPackConfig(SysPackGroup.MYSQL, "dbms_vector", "dbms_vector_mysql.sql", "dbms_vector_body_mysql.sql"),
     SysPackConfig(SysPackGroup.MYSQL, "dbms_hybrid_search", "dbms_hybrid_vector_mysql.sql", "dbms_hybrid_vector_body_mysql.sql"),
     SysPackConfig(SysPackGroup.MYSQL, "dbms_space", "dbms_space_mysql.sql", "dbms_space_body_mysql.sql"),
-    SysPackConfig(SysPackGroup.MYSQL, "dbms_ai_service", "dbms_ai_service_mysql.sql", "dbms_ai_service_body_mysql.sql"),
+    # AI model administration is needed immediately after accepting connections.
+    # Load its small native-interface package during bootstrap, rather than after
+    # the entire asynchronous common-package queue.
+    SysPackConfig(SysPackGroup.MYSQL_SPECIAL, "dbms_ai_service", "dbms_ai_service_mysql.sql", "dbms_ai_service_body_mysql.sql"),
     SysPackConfig(SysPackGroup.MYSQL, "dbms_index_manager", "dbms_index_manager_mysql.sql", "dbms_index_manager_body_mysql.sql"),
 ]
 

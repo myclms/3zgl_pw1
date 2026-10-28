@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
   CHECK(reader.columns.size() == 8 && reader.columns[7].name == "id__2");
   CHECK(reader.columns[0].type == Type::BIGINT && reader.columns[2].type == Type::DOUBLE);
   CHECK(reader.columns[3].type == Type::BOOLEAN && reader.columns[4].type == Type::DATE && reader.columns[5].type == Type::DATETIME);
+  CHECK(reader.columns[5].datetime_scale == 0 && sql_type(reader.columns[5]) == "DATETIME");
   std::string row;
   CHECK(reader.next_json(row) == 0 && row.find("hello,\\u000d\\u000aworld") != std::string::npos);
   CHECK(reader.next_json(row) == 0 && row.find("\"c4\":null") != std::string::npos);
@@ -40,6 +41,10 @@ int main(int argc, char **argv) {
   CHECK(infer({"2024-02-29",false,false}) == Type::DATE);
   CHECK(infer({"2023-02-29",false,false}) == Type::VARCHAR);
   CHECK(infer({"2024-01-01 24:00:00",false,false}) == Type::VARCHAR);
+  CHECK(put(root + "/fractional.csv", "created\n2026-08-01 10:11:12\n2026-08-01T10:11:12.123456\n"));
+  Reader fractional;
+  CHECK(fractional.open(root + "/fractional.csv",root,csv));
+  CHECK(fractional.columns[0].datetime_scale == 6 && sql_type(fractional.columns[0]) == "DATETIME(6)");
   CHECK(put(root + "/sample.jsonl","{\"id\":1,\"a\":true}\n{\"id\":2,\"later\":3.5}\n{\"a\":null,\"id\":3}\n"));
   Options json; json.kind = Kind::JSONL; Reader union_reader;
   CHECK(union_reader.open(root + "/sample.jsonl",root,json));

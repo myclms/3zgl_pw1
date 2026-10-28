@@ -12,6 +12,21 @@ import re
 import sys
 import time
 import pymysql
+from pymysql.constants import FIELD_TYPE
+
+
+def wire_text_conversions():
+    """Keep the server's temporal text, including fractional zeroes.
+
+    PyMySQL's datetime conversion otherwise turns both DATETIME(0) and
+    DATETIME(6) ending in .000000 into the same Python datetime object.
+    mysqltest compares those different wire representations literally.
+    """
+    conversions = pymysql.converters.conversions.copy()
+    for kind in (FIELD_TYPE.DATE, FIELD_TYPE.DATETIME, FIELD_TYPE.TIMESTAMP,
+                 FIELD_TYPE.TIME):
+        conversions[kind] = pymysql.converters.through
+    return conversions
 
 
 def statements(path):
@@ -107,7 +122,8 @@ def main():
         try:
             connection = pymysql.connect(host=arguments.host, port=arguments.port, unix_socket=arguments.unix_socket, user=arguments.user,
                                          password=arguments.password, charset='utf8mb4', autocommit=True,
-                                         read_timeout=90, write_timeout=90, connect_timeout=2)
+                                         read_timeout=90, write_timeout=90, connect_timeout=2,
+                                         conv=wire_text_conversions())
             break
         except pymysql.OperationalError as error:
             if error.args[0] != 2003 or attempt == 29:

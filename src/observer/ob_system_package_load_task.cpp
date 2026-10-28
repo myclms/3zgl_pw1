@@ -90,8 +90,13 @@ int ObSystemPackageLoadTask::load_system_package_()
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(GET_ADMIN_JOB_COUNT(LOAD_MYSQL_SYS_PACKAGE, job_count))) {
   } else if (0 == job_count) {
-    // job not exists, try insert inprogress job
+    // Start work in this tick; creating the job must not add another full
+    // scheduling interval to the first user CALL after startup.
     if (OB_FAIL(ADMIN_JOB_CREATE_WITH_RET(job_id, JOB_TYPE_LOAD_MYSQL_SYS_PACKAGE))) {
+    } else if (OB_FAIL(pl::ObPLPackageManager::load_all_common_sys_package(*sql_proxy, false))) {
+    } else if (OB_FAIL(ADMIN_JOB_COMPLETE(job_id, 0))) {
+    } else {
+      GCTX.sys_package_ready_ = true;
     }
   } else if (OB_FAIL(ADMIN_JOB_FIND(LOAD_MYSQL_SYS_PACKAGE, job_id))) {
     if (ret == OB_ENTRY_NOT_EXIST) {

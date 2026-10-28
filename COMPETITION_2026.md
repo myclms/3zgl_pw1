@@ -58,3 +58,12 @@ The native reader unit `unittest/sql/engine/basic/test_file_scan_utils.cpp` is a
 - Native file-reader unit: ASan and UBSan passed, including 2000 malformed decoder inputs.
 
 These are local results. Competition scores must come from the platform evaluation of the submitted commit.
+
+## Evaluation fixes (2026-10-28)
+
+- Infer CSV/JSONL fractional-second precision separately for each datetime column. Whole-second inputs now use `DATETIME`; fractional inputs and Parquet timestamps retain their precision. Include precision in cached schema signatures and use the same type for execution and DESCRIBE.
+- Preserve temporal wire text in the Python SQL comparator. Its former PyMySQL datetime conversion hid the difference between whole seconds and a `.000000` suffix; the earlier local comparisons therefore did not establish mysqltest-equivalent datetime formatting.
+- Load the native `DBMS_AI_SERVICE` package during bootstrap. CALL resolution can use an already-loaded package without waiting for unrelated asynchronous system packages. Start asynchronous package loading in the same timer tick that creates its job.
+- Validation: native file-reader regression passed under ASan/UBSan with the official seven-row Parquet fixture; three temporal protocol-comparison regressions passed; `git diff --check` passed. Full-server cold-start verification and platform evaluation remain pending for this revision.
+
+AI COLUMN is not implemented by this revision. Its DDL, transactional tasks, background worker, vector-index integration and retry/strict-read tests require a separate implementation.

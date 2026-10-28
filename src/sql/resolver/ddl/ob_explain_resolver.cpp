@@ -57,8 +57,7 @@ int ObExplainResolver::resolve(const ParseNode &parse_tree)
       std::string sql;
       for (size_t i = 0; i < columns.size(); ++i) {
         if (i) { sql += " UNION ALL "; }
-        std::string type = file_sql::sql_type(columns[i].type);
-        if (columns[i].type == file_sql::Type::DATETIME) { type = "DATETIME"; }
+        std::string type = file_sql::sql_type(columns[i]);
         if (columns[i].type == file_sql::Type::VARCHAR || columns[i].type == file_sql::Type::NIL) { type = "VARCHAR"; }
         sql += "SELECT " + literal(columns[i].name) + " AS column_name," + literal(type)
             + " AS column_type," + literal(columns[i].nullable ? "YES" : "NO")

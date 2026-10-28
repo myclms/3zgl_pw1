@@ -27,7 +27,13 @@ static constexpr size_t MAX_RECORD = 16 * 1024 * 1024;
 static constexpr size_t MAX_COLUMNS = 1024;
 enum class Kind { CSV, JSONL, PARQUET, GLOB };
 enum class Type { NIL, BIGINT, DOUBLE, BOOLEAN, VARCHAR, DATE, DATETIME };
-struct Column { std::string name; std::string key; Type type = Type::NIL; bool nullable = false; };
+struct Column {
+  std::string name;
+  std::string key;
+  Type type = Type::NIL;
+  bool nullable = false;
+  unsigned datetime_scale = 0;
+};
 struct Cell { std::string text; bool null = false; bool quoted = false; Type declared = Type::NIL; };
 struct Options {
   Kind kind = Kind::CSV;
@@ -131,6 +137,13 @@ inline const char *sql_type(Type t) {
     default: return "VARCHAR(65535)";
   }
 }
+inline std::string sql_type(const Column &column) {
+  if (column.type == Type::DATETIME) {
+    return column.datetime_scale == 0 ? "DATETIME"
+        : "DATETIME(" + std::to_string(column.datetime_scale) + ")";
+  }
+  return sql_type(column.type);
+}
 inline bool canonical(const std::string &s, std::string &out) {
   if (s.empty() || s.find('\0') != std::string::npos || s.find("://") != std::string::npos) { return false; }
   char buffer[4096];
@@ -170,7 +183,11 @@ inline bool allowed(const std::string &path, const std::string &secure) {
 }
 inline std::string schema_signature(const std::vector<Column> &columns) {
   std::string value;
-  for (const auto &col : columns) { value += json_string(col.name) + json_string(col.key) + std::to_string(static_cast<int>(col.type)) + (col.nullable ? "?;" : "!;"); }
+  for (const auto &col : columns) {
+    value += json_string(col.name) + json_string(col.key)
+        + std::to_string(static_cast<int>(col.type)) + ":"
+        + std::to_string(col.datetime_scale) + (col.nullable ? "?;" : "!;");
+  }
   return value;
 }
 inline std::string encode_config(const std::string &path, const Options &options,
@@ -416,7 +433,8 @@ public:
       }
       if (converted == 5 || physical == 7) { return fail("Parquet decimal/fixed byte array is unsupported"); }
       types_.push_back(physical); converted_.push_back(converted); optional_.push_back(col.field(3).number == 1);
-      columns.push_back({col.field(4).bytes,col.field(4).bytes,type,col.field(3).number == 1});
+      columns.push_back({col.field(4).bytes,col.field(4).bytes,type,col.field(3).number == 1,
+          type == Type::DATETIME ? (converted == 9 ? 3U : 6U) : 0U});
     }
     for (const auto &group : metadata_.field(4).list) {
       if (group.field(1).list.size() != columns.size() || group.field(3).number < 0) { return fail("invalid Parquet row group"); }
@@ -731,7 +749,15 @@ private:
   }
   bool infer_row(const std::vector<Cell> &row) {
     if (row.size() != columns.size()) { return fail("field count differs from schema"); }
-    for (size_t i = 0; i < row.size(); ++i) { columns[i].type = widen(columns[i].type, infer(row[i])); columns[i].nullable = columns[i].nullable || row[i].null; }
+    for (size_t i = 0; i < row.size(); ++i) {
+      Type observed = infer(row[i]);
+      columns[i].type = widen(columns[i].type, observed);
+      columns[i].nullable = columns[i].nullable || row[i].null;
+      if (observed == Type::DATETIME && row[i].text.size() > 19) {
+        columns[i].datetime_scale = std::max(columns[i].datetime_scale,
+            static_cast<unsigned>(row[i].text.size() - 20));
+      }
+    }
     ++rows_seen_;
     return true;
   }

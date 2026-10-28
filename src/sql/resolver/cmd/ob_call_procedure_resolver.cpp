@@ -28,6 +28,43 @@ using namespace common;
 using namespace share::schema;
 namespace sql
 {
+namespace
+{
+bool call_package_is_loaded(ObSchemaChecker &checker,
+                            const ObString &current_database,
+                            const ParseNode &name)
+{
+  bool loaded = false;
+  if (name.type_ == T_SP_ACCESS_NAME && name.num_child_ == 3
+      && name.children_ != nullptr && name.children_[1] != nullptr
+      && name.children_[1]->type_ == T_IDENT) {
+    const ParseNode &package = *name.children_[1];
+    ObString package_name(static_cast<int32_t>(package.str_len_), package.str_value_);
+    const ParseNode *database = name.children_[0];
+    ObString candidates[2] = {current_database, ObString(OB_SYS_DATABASE_NAME)};
+    const int count = database == nullptr ? 2 : 1;
+    if (database != nullptr) {
+      candidates[0].assign_ptr(database->str_value_, static_cast<int32_t>(database->str_len_));
+    }
+    for (int i = 0; !loaded && i < count; ++i) {
+      const ObPackageInfo *spec = nullptr;
+      const ObPackageInfo *body = nullptr;
+      loaded = !candidates[i].empty()
+          && OB_SUCCESS == checker.get_package_info(candidates[i], package_name, PACKAGE_TYPE, spec)
+          && spec != nullptr
+          && OB_SUCCESS == checker.get_package_info(candidates[i], package_name, PACKAGE_BODY_TYPE, body)
+          && body != nullptr;
+      // A local specification shadows the system package, even if its body is
+      // absent. Preserve normal name resolution instead of trying the fallback.
+      if (spec != nullptr) {
+        break;
+      }
+    }
+  }
+  return loaded;
+}
+}
+
 int ObCallProcedureResolver::check_param_expr_legal(ObRawExpr *param)
 {
   int ret = OB_SUCCESS;
@@ -322,8 +359,12 @@ int ObCallProcedureResolver::resolve(const ParseNode &parse_tree)
                                   ObLibCacheNameSpace::NS_CALLSTMT));
     OX (call_proc_info = static_cast<ObCallProcedureInfo*>(stmt->get_cacheobj_guard().get_cache_obj()));
     CK (OB_NOT_NULL(call_proc_info));
-    // Wait for sys package to be loaded if not ready yet
-    OZ (ObResolverUtils::wait_for_sys_package_ready(*session_info_));
+    // A package whose spec and body are already in this schema snapshot does
+    // not depend on the remaining asynchronous system-package load queue.
+    if (OB_SUCC(ret)
+        && !call_package_is_loaded(*schema_checker_, session_info_->get_database_name(), *name_node)) {
+      OZ (ObResolverUtils::wait_for_sys_package_ready(*session_info_));
+    }
     // Parsing process name
     if (OB_SUCC(ret)) {
       if (T_SP_ACCESS_NAME != name_node->type_) {
