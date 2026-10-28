@@ -49,7 +49,15 @@ seekdb_cuvs_free
 seekdb_cuvs_cagra_knn
 ```
 
-Build seekdb with the resulting library:
+The candidate CMake path rebuilds the bridge from this checkout whenever
+`OB_BUILD_CUVS=ON`. It emits `hipvs/libseekdb_cuvs_bridge_candidate.so` under the
+build directory, with a distinct SONAME. An older library on `LD_LIBRARY_PATH`
+therefore cannot silently replace the candidate. The historical
+`CUVS_BRIDGE_LIB` argument remains accepted by the configuration but is not used
+to substitute a precompiled bridge. Set `HIPVS_ROOT` and `ROCM_ROOT` if they are
+not `/opt/hipvs` and `/opt/rocm`; `hipcc`, headers and `libcuvs_c.so` must exist.
+
+Build seekdb:
 
 ```bash
 ./build.sh release \
@@ -93,6 +101,13 @@ CALL dbms_vector.batch_knn(
 ```
 
 See [`examples/batch_knn.sql`](examples/batch_knn.sql) for the table contract.
+
+## Candidate workspace optimization
+
+The changes and current validation boundary are described in
+[`WORKSPACE_OPTIMIZATION.md`](WORKSPACE_OPTIMIZATION.md). The CAGRA build
+parameters and public FP32 data semantics are unchanged. No real AMD speedup or
+official score is asserted until the GPU and SQL comparisons have run.
 
 ## Validation
 
