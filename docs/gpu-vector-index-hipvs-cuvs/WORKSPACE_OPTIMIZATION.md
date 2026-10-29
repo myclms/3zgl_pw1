@@ -142,3 +142,54 @@ registration/support flow, never in source, test evidence or chat. Development
 push permission does not configure the evaluator's read access. This code can
 be developed without a personal cloud allocation; the organizer supplies the
 formal GPU runner. Personal Radeon Cloud access is for pre-submission testing.
+
+## Resumed checks on 2026-10-29
+
+The AMD support reply confirms that the account entered the compute-allocation
+queue; it is not confirmation that a GPU instance can already run. A single
+fresh launch attempt for template 3102 still returned "This template's resource
+pool or resource template is not assigned to your account". The account menu
+also showed 0 Credits. No GPU instance was created and no formal contest
+evaluation was submitted during this check.
+
+The existing bridge was rechecked on Linux x86-64 with GCC 13.3. All ten CPU API
+double cases passed in both the normal build and an AddressSanitizer plus
+UndefinedBehaviorSanitizer build. C11 and C++14 compilation with warnings as
+errors passed, as did the source-build/linkage/SONAME CMake configuration
+fixture. These checks do not establish GPU build success, Recall or speed.
+
+Before building on the assigned AMD machine, run the read-only preflight:
+
+```bash
+python3 docs/gpu-vector-index-hipvs-cuvs/validation/preflight_gpu.py \
+  --output /path/to/evidence/preflight-before-build.json
+```
+
+It verifies the frozen V5 ancestry, accessible AMD KFD/render devices, actual
+ROCm GPU agents, hipVS headers/library, hipcc, and the published ROCm 7.2.4,
+GCC 13.3, CMake 3.31 and Rust 1.97 versions. It does not install dependencies,
+download data, start services or allocate cloud resources. An unavailable or
+mismatched environment returns status 2 and writes the failed checks. Existing
+evidence files are never overwritten. Git lazy fetching is disabled in this
+probe so checking ancestry cannot trigger a download.
+
+After the normal source build, optionally add
+`--binary /path/to/build_release/src/observer/seekdb` and use a new output path.
+This also checks the ELF dependency on the source-built candidate bridge.
+Passing the preflight is only environment/linkage evidence; actual GPU
+correctness, end-to-end SQL timing and the official performance gates still
+require separate runs.
+
+On this computer the probe correctly rejected the local WSL environment:
+V5 ancestry and GCC 13.3 passed, but no AMD KFD/ROCm agents or hipVS installation
+were available. The Windows GPU render device alone was insufficient to pass.
+
+The selected repository plan is to keep `myclms/3zgl_pw` and its existing
+branches/commits. The repository owner will set it private and configure the
+read-only evaluator address; the current developer account cannot change its
+visibility. Changing visibility does not rewrite source commits. Completed
+evaluation records already identify their frozen revisions, while future
+pulls and any later rechecks still need authorized access. No claim is made
+here about undocumented contest leaderboard/recalculation behavior. Neither
+repository visibility nor the registered URL was changed by this check, and
+no token is stored in this document or the source tree.
