@@ -157,4 +157,58 @@ The four raw reports are in `unittest/storage/fts/results/local-20261029-*-repor
 
 A separate baseline profile, collected with compilation paused, recorded 3,725 user CPU samples and no lost samples across interleaved Chinese, English and mixed MATCH queries. It identified heap merging, page decoding and generic binary-ID comparison/charset validation among the query costs. This supports the selected comparison hot path; sampled percentages are not latency reductions.
 
-No official evaluation has been requested for this continuation. Its score must be measured by the platform against that platform's reference.
+This continuation was published as `ad3d2956cf066078a1a96c8028184dfc9aa3aeaa` and submitted on 2026-10-29 at 15:25. The platform completed successfully with **11.923/50**, `fts_mean_improvement=0.11923267319564404` and raw score `23.84653463912881`. This score corresponds to 11.923% mean time reduction against the platform reference; full points require 50% reduction, rather than just passing correctness checks.
+
+
+## Score-free natural-language membership (2026-10-29)
+
+The reference for this step is the evaluated `ad3d2956` binary. Preparing a text retrieval scan previously always requested BM25 relevance: a historical score-usage check in `prepare_text_retrieval_info` is commented out. Even a pure `COUNT(*) ... WHERE MATCH(...) AGAINST(...)` therefore estimated corpus/document frequencies and average document length and evaluated per-posting BM25 values.
+
+The optimizer now inspects every semantic expression root, including SELECT and ORDER BY, before eliding exact scores. Eligibility is deliberately conservative: a basic-table SELECT, natural-language mode without boosts, exactly one WHERE predicate equal to BOOL(MATCH), one match filter, and no other scan filters or subqueries in that block. Only BOOL consumers are accepted. Numeric projections, arithmetic, numeric thresholds, explicit or implicit relevance ordering, boolean-mode searches, joins, functional lookups and queries with additional predicates retain the normal score path. There are no query-text, table-name, row-count or benchmark-specific checks.
+
+BM25 clamps the query token weight to a positive epsilon; a matching natural-language posting has a positive contribution. A positive membership value therefore preserves BOOL(MATCH) after the optimizer proves that no consumer observes its numerical value. The generated scan uses the existing `need_calc_relevance_` contract to omit unused statistics scans and BM25 expressions. Scores exposed to SQL callers continue to use the original calculation.
+
+The dormant no-score DAAT/TAAT paths now initialize their skip vector, avoid null aggregate/statistics references, update TAAT token ranges without an aggregate scan, and deduplicate score-free TAAT document IDs. Inverted scans retain forward ID ordering even without aggregate iterators. Empty queries and iterator reuse keep their normal termination behavior.
+
+During development, an unguarded version failed the new primary-key/compound-filter differential test: its projected IDs did not match the filtered rows. Changing lookup order alone did not fix that mismatch and was reverted. The final optimization excludes all additional predicates, with EXPLAIN assertions that those cases retain full scoring. This is a tested fallback boundary, not a claim that the dormant compound-filter path has been repaired.
+
+### Validation
+
+Both complete server builds and the three normal CMake/CTest targets passed. The final candidate passed the three native SQL suites `hot_path_equivalence`, `tokenize_function` and `simple_query` on two fresh instances. Four native expected EXPLAIN lines in `simple_query.result` change `calc_relevance=true` to `false`; the query results and all other expected text remain unchanged.
+
+`compare_fts_membership.py` captured **154 complete result sets** from the evaluated reference and compared them exactly on both final candidate instances. It covers hidden document IDs and integer primary keys; empty/NULL/stopword-only/repeated questions; 320 distinct query terms exercising TAAT; ascending and descending IDs; compound-filter fallbacks; exact scores, numeric thresholds, arithmetic and ranking; joins; prepared-statement reuse; and DML/rollback. Eight concurrent connections each repeat the primary-key compound-filter case 20 times. EXPLAIN checks prove score elision for eligible membership/count queries and full scoring for numeric, ranked, implicit relevance-order and compound-filter cases. A full scan using functional MATCH lookup is also accepted as an exact-score fallback.
+
+Reproduce the focused comparison against two dedicated instances, using the same script on both binaries:
+
+```sh
+python unittest/storage/fts/compare_fts_membership.py \
+  --socket /path/to/reference/run/sql.sock --output /tmp/membership-reference.json
+python unittest/storage/fts/compare_fts_membership.py \
+  --socket /path/to/candidate/run/sql.sock --output /tmp/membership-candidate.json \
+  --reference /tmp/membership-reference.json --expect-elision
+```
+
+The existing full `compare_fts_results.py` snapshots also matched for every final candidate/control run, including all token arrays, frequencies, document lengths and exact retrieval scores. The initial control A run used the earlier 138-case fixture, followed by a separate 154-case reference capture; control B and both final candidate runs used the final 154-case fixture. No official benchmark inputs, scripts, timing or scoring files were changed. The fixed benchmark files also match the frozen competition ancestor.
+
+### Full benchmark results
+
+Each run loaded all 20,000 documents into a fresh instance with the unchanged original benchmark: batch 500, tokenize rounds 3,000, query rounds 200, samples 3, warmup 30, SKIP_LOAD=0. All four instances used memory 4G, cpu_count 4, datafile 512M, log disk 2G, ERROR logging and CPUs 0-3. No compilation ran during timing. A ran reference first; B ran candidate first.
+
+| Metric | A reference | A candidate | B reference | B candidate |
+| --- | ---: | ---: | ---: | ---: |
+| SELECT 1, ms | 0.1206 | 0.1248 | 0.1164 | 0.1106 |
+| Build IK title/content, s | 9.299 | 9.296 | 9.292 | 9.098 |
+| Build IK content, s | 7.271 | 7.264 | 7.261 | 7.503 |
+| Build BENG, s | 3.957 | 3.952 | 3.949 | 3.974 |
+| TOKENIZE IK, ms | 0.2030 | 0.1991 | 0.2253 | 0.1955 |
+| TOKENIZE BENG, ms | 0.1420 | 0.1417 | 0.1616 | 0.1352 |
+| MATCH Chinese, ms | 1.5698 | 1.3336 | 1.5799 | 1.3225 |
+| MATCH BENG, ms | 2.2562 | 1.9449 | 2.3636 | 1.9303 |
+| MATCH mixed, ms | 1.8127 | 1.4752 | 1.8506 | 1.5071 |
+| MATCH LIMIT, ms | 2.5405 | 2.5032 | 2.5342 | 2.5494 |
+
+The four-query category improved **12.233% in A and 13.147% in B**, averaging **12.690%**. Chinese, English and mixed queries improved in both pairs; the LIMIT query retained its required relevance ordering and was effectively unchanged, including a 0.60% regression in B. All hit counts remained `8001 / 11000 / 7332 / 20`, with complete result comparisons above.
+
+Across all three equally weighted categories the raw local reductions were 4.461% and 9.101% (mean 6.781%). Tokenizer code was not changed in this step: its larger apparent improvement in B, along with SELECT 1 variation, is machine/run variation and is not attributed to score elision. No consistent build-time improvement is claimed. The query category is the reproducible gain; this local result does not predict a platform score or establish the 50% overall reduction needed for full points.
+
+Raw reports are `unittest/storage/fts/results/local-20261029-membership-*-report.txt`. Report Git metadata is the dirty validation checkout at `ad3d2956`; binaries were selected explicitly. The reference executable was saved from that evaluated implementation, while the candidate executable was rebuilt from the seven changed production files.
