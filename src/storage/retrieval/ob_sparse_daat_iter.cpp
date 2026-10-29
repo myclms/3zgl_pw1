@@ -26,7 +26,9 @@ namespace storage
 ObSRMergeCmp::ObSRMergeCmp()
   : cmp_func_(nullptr),
     iter_ids_(nullptr),
-    is_inited_(false)
+    is_inited_(false),
+    uint_id_(false),
+    binary_id_(false)
 {
 }
 
@@ -44,6 +46,8 @@ int ObSRMergeCmp::init(
     if (OB_ISNULL(cmp_func_)) {
       ret = OB_ERR_UNEXPECTED;
     } else {
+      uint_id_ = id_meta.type_ == ObUInt64Type;
+      binary_id_ = id_meta.type_ == ObVarcharType && id_meta.cs_type_ == CS_TYPE_BINARY;
       is_inited_ = true;
     }
   }
@@ -59,9 +63,20 @@ int ObSRMergeCmp::cmp(
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
   } else {
+    const ObDatum &left = get_id_datum(l.iter_idx_);
+    const ObDatum &right = get_id_datum(r.iter_idx_);
     int tmp_ret = 0;
-    if (OB_FAIL(cmp_func_(
-            get_id_datum(l.iter_idx_), get_id_datum(r.iter_idx_), tmp_ret, nullptr))) {
+    if (uint_id_ && !left.is_null() && !right.is_null()) {
+      const uint64_t lv = left.get_uint();
+      const uint64_t rv = right.get_uint();
+      cmp_ret = lv < rv ? -1 : (lv > rv ? 1 : 0);
+    } else if (binary_id_ && !left.is_null() && !right.is_null()) {
+      // Hidden text document IDs are varbinary. Binary collation compares
+      // bytes and lengths without case folding or trailing-space padding.
+      // Keep the general datum comparator for NULL and every other type or
+      // collation (including utf8mb4_bin, whose padding rules differ).
+      cmp_ret = left.get_string().compare(right.get_string());
+    } else if (OB_FAIL(cmp_func_(left, right, tmp_ret, nullptr))) {
     } else {
       cmp_ret = tmp_ret;
     }

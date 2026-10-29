@@ -9,3 +9,7 @@ SELECT TOKENIZE('performance', 'beng') AS tokens;
 SELECT TOKENIZE('database database', 'beng', '[{"output":"all"}]') AS tokens;
 SELECT TOKENIZE('cafex caféx', 'space', '[{"output":"all"}]') AS tokens;
 SELECT TOKENIZE('caféx cafex', 'space', '[{"output":"all"}]') AS tokens;
+# Stopwords use their own accent/case-insensitive collation, including binary
+# input collations; repeated tokens must retain their complete frequencies.
+SELECT TOKENIZE(_utf8mb4'thé THE with WITH database' COLLATE utf8mb4_bin, 'beng', '[{"output":"all"}]') AS tokens;
+SELECT TOKENIZE(_utf8mb4'thé THE with WITH database' COLLATE utf8mb4_general_ci, 'space', '[{"output":"all"}]') AS tokens;

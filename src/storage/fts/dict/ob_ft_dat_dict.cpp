@@ -25,6 +25,7 @@
 #include "lib/list/ob_list.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
+#include "lib/utility/utility.h"
 #include "share/rc/ob_server_runtime.h"
 #include "storage/fts/dict/ob_ft_trie.h"
 namespace oceanbase
@@ -258,9 +259,7 @@ int ObFTDATReader<DATA_TYPE>::match_with_hit(const ObString &ft_char,
   int32_t *base = reinterpret_cast<int32_t *>(dat_->buff + dat_->base_offset_);
   int32_t *check = reinterpret_cast<int32_t *>(dat_->buff + dat_->check_offset_);
 
-  ObFTSingleWord word;
-  word.set_word(ft_char.ptr(), ft_char.length());
-  if (OB_FAIL(dat_->get_map()->find(word, code)) && OB_ENTRY_NOT_EXIST != ret) {
+  if (OB_FAIL(map->find(ft_char, code)) && OB_ENTRY_NOT_EXIST != ret) {
   } else if (OB_ENTRY_NOT_EXIST == ret) {
     ret = OB_SUCCESS;
     hit.set_unmatch();
@@ -301,16 +300,23 @@ ObArrayHashMap *ObFTDAT::get_map() { return reinterpret_cast<ObArrayHashMap *>(b
 
 int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 {
+  return find(word.get_word(), code);
+}
+
+int ObArrayHashMap::find(const ObString &word, ObFTWordCode &code) const
+{
   int ret = OB_ENTRY_NOT_EXIST;
-  uint64_t hash = word.get_word().hash();
-  uint64_t index = hash % header_.capacity_;
+  const uint64_t mask = header_.capacity_ - 1;
+  uint64_t index = word.hash() & mask;
   while (header_.data[index].used) {
-    if (header_.data[index].word == word) {
+    const Entry &entry = header_.data[index];
+    if (entry.word.word_len == word.length()
+        && 0 == MEMCMP(entry.word.word, word.ptr(), word.length())) {
       code = header_.data[index].code;
       ret = OB_SUCCESS;
       break;
     } else {
-      index = (index + 3) % header_.capacity_;
+      index = (index + 3) & mask;
     }
   }
   return ret;
@@ -319,10 +325,10 @@ int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)
 {
   int ret = OB_SUCCESS;
-  uint64_t hash = key.hash();
-  uint64_t index = hash % header_.capacity_;
+  const uint64_t mask = header_.capacity_ - 1;
+  uint64_t index = key.hash() & mask;
   while (header_.data[index].used) {
-    index = (index + 3) % header_.capacity_;
+    index = (index + 3) & mask;
   }
 
   header_.data[index].code = code;
@@ -354,8 +360,11 @@ size_t ObArrayHashMap::estimate_size(size_t word_num)
 
 size_t ObArrayHashMap::estimate_capacity(size_t word_num)
 {
-  constexpr size_t MIN_CAPACITY = 101;                   // prime
-  size_t capacity = MAX(word_num * 4 / 3, MIN_CAPACITY); // 75%
+  // Every probe advances by three slots. A power-of-two capacity makes that
+  // step visit every bucket, while replacing division in each character lookup
+  // with a mask. Keep the original maximum load factor of 75%.
+  constexpr size_t MIN_CAPACITY = 128;
+  size_t capacity = next_pow2(MAX(word_num * 4 / 3, MIN_CAPACITY));
   return capacity;
 }
 } //  namespace storage

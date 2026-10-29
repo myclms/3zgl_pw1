@@ -51,7 +51,10 @@ private:
   ObObjMeta meta_;
 };
 
-typedef common::hash::ObHashMap<ObFTWord, int64_t> ObFTWordMap;
+// A map belongs to one synchronous segmentation call (or its caller's local
+// document loop), never to the shared dictionary/cache. No bucket locks are
+// needed while grouping tokens; independent workers own independent maps.
+typedef common::hash::ObHashMap<ObFTWord, int64_t, common::hash::NoPthreadDefendMode> ObFTWordMap;
 
 class ObAddWordFlag final
 {

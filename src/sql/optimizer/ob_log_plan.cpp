@@ -11987,6 +11987,28 @@ int ObLogPlan::construct_startup_filter_for_limit(ObRawExpr *limit_expr, ObLogic
   return ret;
 }
 
+// A positive BM25 contribution is sufficient when MATCH is consumed only by
+// BOOL. Numeric projections, comparisons, ordering and arithmetic must retain
+// the exact score, even when they share the same MATCH expression as a filter.
+static int check_match_score_needed(ObRawExpr *expr, ObRawExpr *match_expr, bool &needed)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(expr)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (expr == match_expr) {
+    needed = true;
+  } else if (expr->get_expr_type() == T_OP_BOOL && expr->get_param_count() == 1
+             && expr->get_param_expr(0) == match_expr) {
+    // The score is positive for each matching natural-language posting.
+  } else {
+    for (int64_t i = 0; OB_SUCC(ret) && !needed && i < expr->get_param_count(); ++i) {
+      if (OB_FAIL(SMART_CALL(check_match_score_needed(expr->get_param_expr(i), match_expr, needed)))) {
+      }
+    }
+  }
+  return ret;
+}
+
 int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_match_exprs,
                                            const ObIArray<ObRawExpr *> &scan_match_filters,
                                            const ObIArray<ObRawExpr *> &all_match_filters,
@@ -12039,6 +12061,32 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
+    // Restrict elision to a basic-table scan in one query block. Function
+    // lookups, joins, nested query blocks and boosted/boolean searches keep
+    // the normal score path. Extra predicates can be pushed into a lookup or
+    // posting scan; keep that projection/filter path unchanged as well.
+    // Inspect every semantic root, not just WHERE.
+    if (NATURAL_LANGUAGE_MODE == match_against->get_mode_flag()
+        && match_against->get_columns_boosts().empty()
+        && match_pred->get_expr_type() == T_OP_BOOL
+        && get_stmt()->get_condition_exprs().count() == 1
+        && get_stmt()->get_condition_exprs().at(0) == match_pred
+        && scan_filters.empty() && all_match_filters.count() == 1
+        && get_stmt()->is_select_stmt() && get_stmt()->get_table_size() == 1
+        && get_stmt()->get_table_item(0)->is_basic_table()
+        && get_stmt()->get_subquery_exprs().empty()) {
+      ObSEArray<ObRawExpr *, 16> exprs;
+      bool need_score = false;
+      if (OB_FAIL(get_stmt()->get_relation_exprs(exprs))) {
+      }
+      for (int64_t i = 0; OB_SUCC(ret) && !need_score && i < exprs.count(); ++i) {
+        if (OB_FAIL(check_match_score_needed(exprs.at(i), match_against, need_score))) {
+        }
+      }
+      if (OB_SUCC(ret)) {
+        tr_info.need_calc_relevance_ = need_score;
+      }
+    }
     // The mapping table is absent when the data-table rowkey is used as the document ID.
     table_scan->set_doc_id_index_table_id(tr_info.doc_id_idx_tid_);
     if (table_scan->is_vec_adaptive_scan() || table_scan->is_vec_idx_scan_post_filter()) {

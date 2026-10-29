@@ -1,0 +1,13 @@
+reference_ns=19.718 checksum=4002000000
+candidate_ns=13.318 checksum=4002000000
+candidate_ns=13.252 checksum=4002000000
+reference_ns=19.838 checksum=4002000000
+reference_ns=19.639 checksum=4002000000
+candidate_ns=12.653 checksum=4002000000
+candidate_ns=12.283 checksum=4002000000
+reference_ns=19.880 checksum=4002000000
+reference_ns=19.119 checksum=4002000000
+candidate_ns=12.941 checksum=4002000000
+candidate_ns=12.707 checksum=4002000000
+reference_ns=20.186 checksum=4002000000
+FTS dictionary lookup regressions passed
