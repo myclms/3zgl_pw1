@@ -90,19 +90,13 @@ int ObIKFTParser::get_next_token(const char *&word,
         } else {
         }
       } else {
-        bool is_stop = false;
-        // if (!OB_ISNULL(dict_stop_)
-        //     && OB_FAIL(dict_stop_->match(ObString(len, output_word + offset), is_stop))) {
-        //   LOG_WARN("Failed to match stopwords", K(ret));
-        // } else
-        if (!is_stop) {
-          word = output_word + offset;
-          word_len = len;
-          char_cnt = cnt;
-          word_freq = 1;
-          accept_token = true;
-        } else {
-        }
+        // Stopword filtering is performed by the common parse helper. The
+        // IK-specific stop dictionary was never consulted here.
+        word = output_word + offset;
+        word_len = len;
+        char_cnt = cnt;
+        word_freq = 1;
+        accept_token = true;
       }
     }
   }
@@ -249,17 +243,11 @@ int ObIKFTParser::init_dict(const ObFTParserParam &param)
                               ObCharsetType::CHARSET_UTF8MB4,
                               ObCollationType::CS_TYPE_UTF8MB4_BIN);
 
-  ObFTDictDesc stopword_dict_desc("stopword",
-                                  ObFTDictType::DICT_IK_STOP,
-                                  ObCharsetType::CHARSET_UTF8MB4,
-                                  ObCollationType::CS_TYPE_UTF8MB4_BIN);
-
   if (should_read_newest_table()) {
     // clear dict cache, always false now
   } else {
     if (OB_FAIL(init_single_dict(main_dict_desc, cache_main_))) {
     } else if (OB_FAIL(init_single_dict(quan_dict_desc, cache_quan_))) {
-    } else if (OB_FAIL(init_single_dict(stopword_dict_desc, cache_stop_))) {
     }
   }
 
@@ -267,7 +255,6 @@ int ObIKFTParser::init_dict(const ObFTParserParam &param)
     // already logged.
   } else if (OB_FAIL(build_dict_from_cache(main_dict_desc, cache_main_, dict_main_))) {
   } else if (OB_FAIL(build_dict_from_cache(quan_dict_desc, cache_quan_, dict_quan_))) {
-  } else if (OB_FAIL(build_dict_from_cache(stopword_dict_desc, cache_stop_, dict_stop_))) {
   }
 
   return ret;
@@ -353,6 +340,7 @@ void ObIKFTParser::reset()
   if (!OB_ISNULL(ctx_)) {
     ctx_->~TokenizeContext();
     allocator_.free(ctx_);
+    ctx_ = nullptr;
   }
 
   for (ObIIKProcessor *segmenter : segmenters_) {
@@ -363,22 +351,19 @@ void ObIKFTParser::reset()
   }
   segmenters_.clear();
 
-  cache_main_.reset();
-  cache_quan_.reset();
-  cache_stop_.reset();
-
   if (!OB_ISNULL(dict_main_)) {
     dict_main_->~ObIFTDict();
     allocator_.free(dict_main_);
+    dict_main_ = nullptr;
   }
   if (!OB_ISNULL(dict_quan_)) {
     dict_quan_->~ObIFTDict();
     allocator_.free(dict_quan_);
+    dict_quan_ = nullptr;
   }
-  if (!OB_ISNULL(dict_stop_)) {
-    dict_stop_->~ObIFTDict();
-    allocator_.free(dict_stop_);
-  }
+  // Readers borrow cache blocks: release them before unpinning the blocks.
+  cache_main_.reset();
+  cache_quan_.reset();
 
   is_inited_ = false;
 }

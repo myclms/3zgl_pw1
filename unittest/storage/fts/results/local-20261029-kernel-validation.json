@@ -1,0 +1,105 @@
+{
+  "reference_commit": "2a826d109fde3bf9c7c1668a5f12dfc55393574a",
+  "method": "Unmodified official benchmark; equal category weights; local relative comparison, not a platform score",
+  "reports": {
+    "reference": [
+      "fts-reference-a-report.txt",
+      "fts-reference-b-report.txt"
+    ],
+    "candidate": [
+      "fts-candidate-e-report.txt",
+      "fts-candidate-f-report.txt"
+    ]
+  },
+  "metrics": {
+    "build_ik_all_sec": {
+      "reference": 9.359,
+      "candidate": 9.1965,
+      "relative_reduction": 0.017362966128859902
+    },
+    "build_ik_content_sec": {
+      "reference": 7.409000000000001,
+      "candidate": 7.318,
+      "relative_reduction": 0.012282359292752232
+    },
+    "build_beng_en_sec": {
+      "reference": 3.8465,
+      "candidate": 3.9935,
+      "relative_reduction": -0.03821656050955413
+    },
+    "tokenize_ik_avg_ms": {
+      "reference": 0.2409,
+      "candidate": 0.23265000000000002,
+      "relative_reduction": 0.03424657534246567
+    },
+    "tokenize_beng_avg_ms": {
+      "reference": 0.1642,
+      "candidate": 0.1587,
+      "relative_reduction": 0.03349573690621199
+    },
+    "query_cn_avg_ms": {
+      "reference": 1.4729,
+      "candidate": 1.46325,
+      "relative_reduction": 0.006551700726458165
+    },
+    "query_beng_avg_ms": {
+      "reference": 2.1406,
+      "candidate": 2.0431,
+      "relative_reduction": 0.04554797720265358
+    },
+    "query_mixed_avg_ms": {
+      "reference": 1.68045,
+      "candidate": 1.66565,
+      "relative_reduction": 0.008807164747537843
+    },
+    "query_limit_avg_ms": {
+      "reference": 2.7977499999999997,
+      "candidate": 0.5508500000000001,
+      "relative_reduction": 0.803109641676347
+    },
+    "select1_avg_ms": {
+      "reference": 0.15355000000000002,
+      "candidate": 0.13535,
+      "relative_reduction": 0.11852816672093791
+    },
+    "build_total_sec": {
+      "reference": 20.628,
+      "candidate": 20.5195,
+      "relative_reduction": 0.005259840992825282
+    }
+  },
+  "sources_sha256": {
+    "src/sql/das/iter/ob_das_cache_lookup_iter.cpp": "6185bbbb5c5462de0073466500ae981833923c3ff6059c9dcfa7b70c98b9f19f",
+    "src/sql/rewrite/ob_transform_pre_process.cpp": "bdeb8617d73193b34516d1316ed14761dae9b91c911a245f0229b53bffc2415f",
+    "src/storage/fts/dict/ob_ft_range_dict.cpp": "ffe1e32044723193236b4130f8c2da26755a00a20cc6bd5506ccacb6e7f74e66",
+    "src/storage/fts/dict/ob_ft_range_dict.h": "878c94dd40912ee152cfafc05c7c0c243cc27c2ab9209c07ec1490760e4b7b84",
+    "src/storage/fts/ob_ik_ft_parser.cpp": "be82ec0b4557f4191c80c086ac60673dd8e16d0ced55be5c8d2743dc3cb43900",
+    "src/storage/fts/ob_ik_ft_parser.h": "9d5a5935041cf7dacd33536e9a1ca97f2307de2865e19fab80f66af2a8a24e36"
+  },
+  "correctness": {
+    "complete": {
+      "result_groups": 43,
+      "equal": true,
+      "reference_sha256": "555a629e9dce077c09c173efefa2967e9db69f487799e00baa167a704905f3ff",
+      "candidate_sha256": "555a629e9dce077c09c173efefa2967e9db69f487799e00baa167a704905f3ff"
+    },
+    "membership": {
+      "result_groups": 154,
+      "equal": true,
+      "reference_sha256": "14e011d97c6fe447875cf26879978db10944492618638bc6e83c09e8f8c28570",
+      "candidate_sha256": "14e011d97c6fe447875cf26879978db10944492618638bc6e83c09e8f8c28570"
+    },
+    "cardinality": {
+      "result_groups": 100,
+      "equal": true,
+      "reference_sha256": "649067c1cbe5205d9fa8dee9010a05502d56555dd0f7d6942326c9880c8372e4",
+      "candidate_sha256": "649067c1cbe5205d9fa8dee9010a05502d56555dd0f7d6942326c9880c8372e4"
+    },
+    "mysqltest": {
+      "hot_path_equivalence": "passed",
+      "tokenize_function": "passed",
+      "simple_query": "passed"
+    }
+  },
+  "local_equal_category_mean_time_reduction": 0.08233939961664688
+}

@@ -1,0 +1,14 @@
+Internal ctest changing into directory: /home/xty/seekdb-validation/source/build_release
+Test project /home/xty/seekdb-validation/source/build_release
+    Start 1: test_fts_hot_path
+1/4 Test #1: test_fts_hot_path ................   Passed    0.14 sec
+    Start 2: test_fts_word_grouping
+2/4 Test #2: test_fts_word_grouping ...........   Passed    0.06 sec
+    Start 3: test_fts_docid_compare
+3/4 Test #3: test_fts_docid_compare ...........   Passed    0.08 sec
+    Start 4: test_fts_dictionary_lookup
+4/4 Test #4: test_fts_dictionary_lookup .......   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Total Test time (real) =   0.29 sec

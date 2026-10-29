@@ -32,6 +32,54 @@ namespace oceanbase
 using namespace common;
 namespace sql
 {
+// COUNT(*) over a single derived table observes its cardinality, not which
+// rows survived LIMIT/OFFSET. Do not introduce an implicit relevance order
+// in that child: it would force scoring and a blocking top-N sort. Explicit
+// orders and all consumers of row values retain the ordinary ranked path.
+static bool is_count_only_derived_table(const ObIArray<ObParentDMLStmt> &parents,
+                                      const ObDMLStmt *stmt)
+{
+  bool count_only = false;
+  if (parents.count() == 1 && OB_NOT_NULL(stmt) && stmt->is_select_stmt()
+      && OB_NOT_NULL(parents.at(0).stmt_) && parents.at(0).stmt_->is_select_stmt()) {
+    const ObSelectStmt *child = static_cast<const ObSelectStmt *>(stmt);
+    const ObSelectStmt *parent = static_cast<const ObSelectStmt *>(parents.at(0).stmt_);
+    const TableItem *view = parent->get_table_size() == 1 ? parent->get_table_item(0) : nullptr;
+    const ObAggFunRawExpr *agg = parent->get_aggr_item_size() == 1
+        ? parent->get_aggr_item(0) : nullptr;
+    count_only = OB_NOT_NULL(view) && view->is_generated_table() && view->ref_query_ == child
+        && parent->get_from_item_size() == 1 && !parent->is_set_stmt()
+        && parent->is_scala_group_by() && !parent->has_rollup()
+        && parent->get_select_item_size() == 1 && OB_NOT_NULL(agg)
+        && parent->get_select_item(0).expr_ == agg && agg->get_expr_type() == T_FUN_COUNT
+        && agg->get_real_param_count() == 0 && !agg->is_param_distinct()
+        && parent->get_condition_exprs().empty() && !parent->has_having()
+        && !parent->has_window_function() && parent->get_subquery_exprs().empty()
+        && !parent->is_contains_assignment() && !parent->is_calc_found_rows()
+        && !parent->has_for_update()
+        && !child->is_set_stmt() && !child->has_recursive_cte()
+        && !child->has_group_by() && !child->has_distinct() && !child->has_having()
+        && !child->has_window_function() && child->get_subquery_exprs().empty()
+        && !child->is_contains_assignment() && !child->is_calc_found_rows()
+        && !child->has_for_update() && !child->is_fetch_with_ties();
+    // Only inert projections: evaluating functions/assignments may be
+    // observable even if the parent does not read their values.
+    for (int64_t i = 0; count_only && i < child->get_select_item_size(); ++i) {
+      const ObRawExpr *expr = child->get_select_item(i).expr_;
+      count_only = OB_NOT_NULL(expr) && (expr->is_column_ref_expr() || expr->is_const_expr());
+    }
+    // A volatile predicate may observe the number/order of evaluated rows.
+    for (int64_t i = 0; count_only && i < child->get_condition_exprs().count(); ++i) {
+      const ObRawExpr *expr = child->get_condition_exprs().at(i);
+      count_only = OB_NOT_NULL(expr) && !expr->has_flag(CNT_STATE_FUNC)
+          && !expr->has_flag(CNT_RAND_FUNC) && !expr->has_flag(CNT_PL_UDF)
+          && !expr->has_flag(CNT_DYNAMIC_USER_VARIABLE) && !expr->has_flag(CNT_VOLATILE_CONST)
+          && !expr->has_flag(CNT_LAST_INSERT_ID) && !expr->has_flag(CNT_ASSIGN_EXPR);
+    }
+  }
+  return count_only;
+}
+
 int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> &parent_stmts,
                                               ObDMLStmt *&stmt,
                                               bool &trans_happened)
@@ -178,7 +226,7 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
       }
     }
     if (OB_SUCC(ret)) {
-      if (stmt->get_match_exprs().count() > 0 &&
+      if (stmt->get_match_exprs().count() > 0 && !is_count_only_derived_table(parent_stmts, stmt) &&
           OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
       } else {
         trans_happened |= is_happened;

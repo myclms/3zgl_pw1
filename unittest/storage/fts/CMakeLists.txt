@@ -45,3 +45,16 @@ target_compile_options(test_fts_dictionary_lookup PRIVATE -ffunction-sections -f
 target_link_options(test_fts_dictionary_lookup PRIVATE -Wl,--gc-sections)
 target_link_libraries(test_fts_dictionary_lookup PRIVATE ob_share_static oblib ob_malloc)
 add_test(NAME test_fts_dictionary_lookup COMMAND test_fts_dictionary_lookup)
+
+add_executable(test_fts_range_allocator
+  test_fts_range_allocator.cpp
+  ${PROJECT_SOURCE_DIR}/src/storage/fts/dict/ob_ft_range_dict.cpp
+  ${PROJECT_SOURCE_DIR}/src/storage/fts/dict/ob_ft_cache_dict.cpp
+  ${PROJECT_SOURCE_DIR}/src/storage/fts/dict/ob_ft_dat_dict.cpp
+  ${PROJECT_SOURCE_DIR}/src/storage/fts/dict/ob_ft_dict_def.cpp)
+target_include_directories(test_fts_range_allocator PRIVATE
+  ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/query/api ${PROJECT_SOURCE_DIR}/src/data_plane/api)
+target_compile_options(test_fts_range_allocator PRIVATE -ffunction-sections -fdata-sections -Wno-invalid-offsetof)
+target_link_options(test_fts_range_allocator PRIVATE -Wl,--gc-sections)
+target_link_libraries(test_fts_range_allocator PRIVATE ob_share_static oblib ob_malloc)
+add_test(NAME test_fts_range_allocator COMMAND test_fts_range_allocator)
