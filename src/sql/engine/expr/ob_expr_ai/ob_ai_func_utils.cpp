@@ -1326,6 +1326,30 @@ int ObAIFuncUtils::get_ai_func_info(ObIAllocator &allocator, const ObString &mod
   return ret;
 }
 
+static int separate_completion_system_prompt(ObIAllocator &allocator, ObJsonObject *config,
+                                            ObString &system_prompt, ObJsonObject *&request_config)
+{
+  int ret = OB_SUCCESS;
+  request_config = config;
+  ObJsonNode *instruction = config == nullptr ? nullptr : config->get_value("system_prompt");
+  if (instruction != nullptr) {
+    if (instruction->json_type() != ObJsonNodeType::J_STRING) {
+      ret = OB_INVALID_ARGUMENT;
+    } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_object(allocator, request_config))) {
+    } else {
+      system_prompt = static_cast<ObJsonString *>(instruction)->value();
+      for (int64_t i = 0; OB_SUCC(ret) && i < config->element_count(); ++i) {
+        ObString key;
+        if (OB_FAIL(config->get_key(i, key))) {
+        } else if (key.compare("system_prompt") != 0) {
+          ret = request_config->add(key, config->get_value(i));
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObString &result)
 {
   int ret = OB_SUCCESS;
@@ -1339,13 +1363,15 @@ int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObStr
   ObAIFuncClient client;
   ObString unencrypted_access_key;
   ObString request_model_name = get_request_model_name();
-  if (!is_completion_type()) {
+  ObJsonObject *request_config = nullptr;
+  if (OB_FAIL(separate_completion_system_prompt(*allocator_, config, prompt_str, request_config))) {
+  } else if (!is_completion_type()) {
     ret = OB_INVALID_ARGUMENT;
     LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_complete, info type is not completion");
   } else if (OB_FAIL(ObAIFuncUtils::get_complete_provider(*allocator_, endpoint_info_.get_provider(), complete_provider))) {
   } else if (OB_FAIL(endpoint_info_.get_unencrypted_access_key(*allocator_, unencrypted_access_key))) {
   } else if (OB_FAIL(complete_provider->get_header(*allocator_, unencrypted_access_key, headers))) {
-  } else if (OB_FAIL(complete_provider->get_body(*allocator_, request_model_name, prompt_str, prompt, config, body))) {
+  } else if (OB_FAIL(complete_provider->get_body(*allocator_, request_model_name, prompt_str, prompt, request_config, body))) {
   } else if (OB_FAIL(client.send_post(*allocator_, endpoint_info_.get_url(), headers, body, response))) {
   } else if (OB_FAIL(complete_provider->parse_output(*allocator_, response, result_base))) {
   } else if (OB_ISNULL(result_base) || result_base->json_type() != ObJsonNodeType::J_STRING

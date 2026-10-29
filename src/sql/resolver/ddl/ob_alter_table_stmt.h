@@ -104,6 +104,8 @@ public:
     alter_table_arg_.lock_session_create_ts_ = create_ts;
   }
   void set_lock_priority();
+  uint64_t ai_retry_column_id_ = 0;
+  common::ObString ai_retry_predicate_;
 private:
   obcall::ObAlterTableArg alter_table_arg_;
   bool is_comment_table_;

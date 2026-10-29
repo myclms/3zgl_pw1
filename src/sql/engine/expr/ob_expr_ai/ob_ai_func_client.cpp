@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_ENG
 #include "ob_ai_func_client.h"
+#include "sql/engine/expr/ob_expr_ai/ai_column_evaluation.h"
 
 namespace oceanbase 
 {
@@ -23,14 +24,15 @@ namespace common
 {
 
 const int64_t ObAIFuncClient::CURL_MAX_TIMEOUT_SEC = INT_MAX/1000;
+
 ObAIFuncClient::ObAIFuncClient()
     : allocator_(nullptr), url_(nullptr), header_list_(nullptr),
       curlm_(nullptr), curl_(nullptr), curl_handles_(), response_buffers_() 
 {
   is_finished_.store(false);
   abs_timeout_ts_ = 0;
-  max_retry_times_ = 3;  // default retry 3 times
-  timeout_sec_ = 60; // default timeout 1 minute
+  max_retry_times_ = sql::AIColumnEvaluationScope::active() ? 0 : 3;
+  timeout_sec_ = sql::AIColumnEvaluationScope::active() ? 5 : 60;
 }
 
 void ObAIFuncClient::reset() 
@@ -280,7 +282,12 @@ int ObAIFuncClient::send_post_batch(common::ObIAllocator &allocator,
     if (OB_FAIL(init(allocator, url, headers))) {
     }
     // retry if need
-    for (int64_t i = 0; OB_SUCC(ret) && i < max_retry_times_; ++i) {
+    if (OB_SUCC(ret) && sql::AIColumnEvaluationScope::active()) {
+      // The durable AI-column task owns the retry budget, including batches.
+      ret = send_post_batch(data_array, responses);
+    }
+    for (int64_t i = 0; !sql::AIColumnEvaluationScope::active()
+                       && OB_SUCC(ret) && i < max_retry_times_; ++i) {
       ret = send_post_batch(data_array, responses);
       if (is_timeout()) {
         ret = OB_TIMEOUT;

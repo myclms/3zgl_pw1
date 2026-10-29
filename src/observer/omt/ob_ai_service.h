@@ -27,6 +27,7 @@
 
 namespace oceanbase
 {
+namespace observer { class AIColumnWorker; }
 namespace omt
 {
 
@@ -50,14 +51,15 @@ public:
   virtual ~ObAiService();
   static int server_module_init(ObAiService* &ai_service);
   int init();
-  int start() { return OB_SUCCESS; }
-  void stop() {};
-  void wait() {};
+  int start();
+  void stop();
+  void wait();
   void destroy();
 public:
   int get_ai_service_guard(ObAiServiceGuard &ai_service_guard);
 private:
   bool is_inited_;
+  observer::AIColumnWorker *column_worker_;
   DISALLOW_COPY_AND_ASSIGN(ObAiService);
 };
 

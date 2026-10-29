@@ -224,6 +224,8 @@ public:
   bool contain_table_scan() const { return contain_table_scan_; }
   void set_has_nested_sql(bool has_nested_sql) { has_nested_sql_ = has_nested_sql; }
   bool has_nested_sql() const { return has_nested_sql_; }
+  common::ObIArray<uint64_t> &get_ai_column_references() { return ai_column_references_; }
+  const common::ObIArray<uint64_t> &get_ai_column_references() const { return ai_column_references_; }
   void set_session_id(uint64_t v) { session_id_ = v; }
   uint64_t get_session_id() const { return session_id_; }
   bool contains_temp_table() const {return 0 != session_id_; }
@@ -447,6 +449,7 @@ private:
   bool is_wise_join_; // not need serialize
   bool contain_table_scan_; // whether it contains primary key scan
   bool has_nested_sql_; // whether nested statements may be executed
+  common::ObSEArray<uint64_t, 8> ai_column_references_;
   uint64_t  session_id_; // When the plan includes temporary tables, record table_schema->session_id, used to determine if the plan can be reused
 
   //for plan cache, not need serialize

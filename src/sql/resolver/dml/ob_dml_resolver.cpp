@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/engine/dml/ai_column_dml.h"
 #include "config_bridge.h"
 #include "ob_dml_resolver.h"
 #include "sql/engine/basic/file_sql_reader.h"
@@ -5803,6 +5804,9 @@ int ObDMLResolver::check_basic_column_generated(const ObColumnRefRawExpr *col_ex
   const ColumnItem *view_column_item = NULL;
   if (OB_ISNULL(col_expr) || OB_ISNULL(dml_stmt)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (col_expr->is_ai_column() && !AIColumnWriteScope::active()) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "assigning an AI result column");
   } else if (col_expr->is_generated_column()) {
     is_generated = true;
   } else if (OB_ISNULL(table_item = dml_stmt->get_table_item_by_id(col_expr->get_table_id()))) {
@@ -5829,6 +5833,9 @@ int ObDMLResolver::check_basic_column_generated(const ObColumnRefRawExpr *col_ex
       ret = OB_ERR_UNEXPECTED;
     } else if (OB_ISNULL(basic_column_item->expr_)) {
       ret = OB_ERR_UNEXPECTED;
+    } else if (basic_column_item->expr_->is_ai_column() && !AIColumnWriteScope::active()) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "assigning an AI result column through a view");
     } else if (basic_column_item->expr_->is_generated_column()) {
       is_generated = true;
     }

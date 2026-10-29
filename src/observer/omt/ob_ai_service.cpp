@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SERVER_OMT
 #include "ob_ai_service.h"
+#include "observer/ai_service/ai_column_worker.h"
 #include "observer/ai_service/ob_ai_service_executor.h"
 #include "sql/privilege_check/ob_ai_model_priv_util.h"
 #include "sql/session/ob_sql_session_info.h"
@@ -23,13 +24,14 @@
 
 using namespace oceanbase::share;
 using namespace oceanbase::common;
+using oceanbase::observer::AIColumnWorker;
 namespace oceanbase
 {
 namespace omt
 {
 
 ObAiService::ObAiService()
-  : is_inited_(false)
+  : is_inited_(false), column_worker_(nullptr)
 {
 }
 
@@ -53,6 +55,11 @@ int ObAiService::init()
   int ret = OB_SUCCESS;
   if (IS_INIT) {
     ret = OB_INIT_TWICE;
+  } else if (OB_ISNULL(column_worker_ = OB_NEW(AIColumnWorker, "AIColumnWorker"))) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else if (OB_FAIL(column_worker_->init())) {
+    OB_DELETE(AIColumnWorker, "AIColumnWorker", column_worker_);
+    column_worker_ = nullptr;
   } else {
     is_inited_ = true;
   }
@@ -61,8 +68,18 @@ int ObAiService::init()
 
 void ObAiService::destroy()
 {
+  stop();
+  wait();
+  if (column_worker_ != nullptr) {
+    OB_DELETE(AIColumnWorker, "AIColumnWorker", column_worker_);
+    column_worker_ = nullptr;
+  }
   is_inited_ = false;
 }
+
+int ObAiService::start() { return column_worker_ == nullptr ? OB_NOT_INIT : column_worker_->start(); }
+void ObAiService::stop() { if (column_worker_ != nullptr) { column_worker_->stop(); } }
+void ObAiService::wait() { if (column_worker_ != nullptr) { column_worker_->wait(); } }
 
 int ObAiService::get_ai_service_guard(ObAiServiceGuard &ai_service_guard)
 {

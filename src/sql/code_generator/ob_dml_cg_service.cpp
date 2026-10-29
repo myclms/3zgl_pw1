@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_CG
 #include "ob_dml_cg_service.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "sql/code_generator/ob_static_engine_cg.h"
 #include "sql/engine/ob_physical_plan.h"
 #include "sql/parser/ob_parser.h"
@@ -1345,7 +1346,7 @@ int ObDmlCgService::check_upd_need_all_columns(ObLogDelUpd &op,
   if (OB_ISNULL(session) || OB_ISNULL(schema_guard) || OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(session->get_binlog_row_image(binlog_row_image))) {
-  } else if (binlog_row_image == ObBinlogRowImage::FULL) {
+  } else if (binlog_row_image == ObBinlogRowImage::FULL || has_ai_columns(*table_schema)) {
     // full mode
     need_all_columns = true;
   } else if (!is_primary_index) {
@@ -2095,8 +2096,23 @@ int ObDmlCgService::generate_dml_base_ctdef(ObLogicalOperator &op,
   int ret = OB_SUCCESS;
   dml_base_ctdef.is_primary_index_ = index_dml_info.is_primary_index_;
   dml_base_ctdef.is_vec_hnsw_index_vid_opt_ = index_dml_info.is_vec_hnsw_index_vid_opt_;
+  if (index_dml_info.is_primary_index_) {
+    const ObTableSchema *table = nullptr;
+    if (OB_FAIL(cg_.opt_ctx_->get_schema_guard()->get_table_schema(index_dml_info.ref_table_id_, table))) {
+    } else if (table == nullptr) {
+      ret = OB_TABLE_NOT_EXIST;
+    } else {
+      dml_base_ctdef.has_ai_columns_ = has_ai_columns(*table);
+      dml_base_ctdef.ai_internal_write_ = dml_base_ctdef.has_ai_columns_ && AIColumnWriteScope::active();
+      if (dml_base_ctdef.has_ai_columns_) {
+        cg_.phy_plan_->set_has_nested_sql(true);
+        cg_.phy_plan_->set_need_serial_exec(true);
+      }
+    }
+  }
   dml_base_ctdef.column_ids_.set_capacity(index_dml_info.column_exprs_.count());
-  if (OB_FAIL(generate_dml_column_ids(op, index_dml_info.column_exprs_, dml_base_ctdef.column_ids_))) {
+  if (OB_FAIL(ret)) {
+  } else if (OB_FAIL(generate_dml_column_ids(op, index_dml_info.column_exprs_, dml_base_ctdef.column_ids_))) {
   } else if (OB_FAIL(cg_.generate_rt_exprs(old_row, dml_base_ctdef.old_row_))) {
   } else if (OB_FAIL(cg_.generate_rt_exprs(new_row, dml_base_ctdef.new_row_))) {
   } else if (index_dml_info.is_primary_index_) {

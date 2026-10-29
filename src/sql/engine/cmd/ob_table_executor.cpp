@@ -20,6 +20,7 @@
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "share/ob_server_struct.h"
 #include "sql/engine/cmd/ob_table_executor.h"
+#include "sql/engine/dml/ai_column_sql.h"
 #include "query/command/ob_root_command_service.h"
 #include "query/command/ob_root_service_serialization.h"
 #include "query/runtime/ob_query_runtime_environment.h"
@@ -753,6 +754,19 @@ int ObAlterTableExecutor::alter_table_exchange_partition_rpc(obcall::ObExchangeP
 
 int ObAlterTableExecutor::execute(ObExecContext &ctx, ObAlterTableStmt &stmt)
 {
+  if (stmt.ai_retry_column_id_ != 0) {
+    const share::schema::ObTableSchema *table = nullptr;
+    ObSchemaGetterGuard retry_guard;
+    int retry_ret = GCTX.schema_service_->get_runtime_schema_guard(retry_guard);
+    if (retry_ret == OB_SUCCESS) {
+      retry_ret = retry_guard.get_table_schema(stmt.get_alter_table_arg().alter_table_schema_.get_table_id(), table);
+    }
+    if (retry_ret == OB_SUCCESS && table == nullptr) { retry_ret = OB_TABLE_NOT_EXIST; }
+    if (retry_ret == OB_SUCCESS) {
+      retry_ret = AIColumnSQL::retry(ctx, *table, stmt.ai_retry_column_id_, stmt.ai_retry_predicate_);
+    }
+    return retry_ret;
+  }
   int ret = OB_SUCCESS;
   ObSqlExecutorCtx *task_exec_ctx = NULL;
   obcall::ObAlterTableArg &alter_table_arg = stmt.get_alter_table_arg();
@@ -878,6 +892,28 @@ int ObAlterTableExecutor::execute(ObExecContext &ctx, ObAlterTableStmt &stmt)
       "table_info", table_info_buffer,
       "schema_version", res.schema_version_);
     SQL_ENG_LOG(INFO, "finish alter table execute.", K(ret), "ddl_event_info", ObDDLEventInfo(GCTX.self_addr()), K(first_stmt));
+  }
+  if (OB_SUCC(ret)) {
+    const auto &changes = stmt.get_alter_table_schema();
+    bool regenerate = false;
+    for (int64_t i = 0; i < changes.get_column_count(); ++i) {
+      regenerate = regenerate || changes.get_column_schema_by_idx(i)->is_ai_column();
+    }
+    if (regenerate) {
+      ObSchemaGetterGuard current_guard;
+      const ObTableSchema *current_table = nullptr;
+      if (OB_FAIL(GCTX.schema_service_->get_runtime_schema_guard(current_guard))) {
+      } else if (OB_FAIL(current_guard.get_table_schema(changes.get_table_id(), current_table))) {
+      } else if (current_table == nullptr) { ret = OB_TABLE_NOT_EXIST; }
+      else {
+        for (int64_t i = 0; OB_SUCC(ret) && i < changes.get_column_count(); ++i) {
+          const ObColumnSchemaV2 *column = changes.get_column_schema_by_idx(i);
+          if (column->is_ai_column()) {
+            ret = AIColumnSQL::retry(ctx, *current_table, column->get_column_id(), ObString());
+          }
+        }
+      }
+    }
   }
   return ret;
 }

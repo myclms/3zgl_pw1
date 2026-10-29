@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX SQL_ENG
 #include "config_bridge.h"
 #include "sql/engine/dml/ob_dml_service.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "sql/engine/expr/ob_datum_cast.h"
 #include "share/rc/ob_server_runtime.h"
 #include "sql/das/ob_das_insert_op.h"
@@ -619,6 +620,7 @@ int ObDMLService::process_insert_row(const ObInsCtDef &ins_ctdef,
         eval_ctx, ins_ctdef.trig_ctdef_, ins_rtdef.trig_rtdef_))) {
     } else if (OB_FAIL(TriggerHandle::do_handle_before_row(
         dml_op, ins_ctdef.das_base_ctdef_, ins_ctdef.trig_ctdef_, ins_rtdef.trig_rtdef_))) {
+    } else if (OB_FAIL(AIColumnDML::before_row(dml_op, ins_ctdef, true))) {
     }
     if (OB_FAIL(ret)) {
     } else if (OB_FAIL(check_row_null(ins_ctdef.new_row_,
@@ -791,6 +793,7 @@ int ObDMLService::process_update_row(const ObUpdCtDef &upd_ctdef,
           dml_op.get_eval_ctx(), upd_ctdef.trig_ctdef_, upd_rtdef.trig_rtdef_))) {
       } else if (OB_FAIL(TriggerHandle::do_handle_before_row(
           dml_op, upd_ctdef.das_base_ctdef_, upd_ctdef.trig_ctdef_, upd_rtdef.trig_rtdef_))) {
+      } else if (OB_FAIL(AIColumnDML::before_row(dml_op, upd_ctdef, false))) {
       }
       if (OB_FAIL(ret)) {
       } else if (OB_FAIL(check_row_null(upd_ctdef.new_row_,
@@ -2166,6 +2169,8 @@ int ObDMLService::handle_after_processing_multi_row(ObDMLModifyRowsList *dml_mod
           }
         }
         // process after row trigger
+        if (OB_SUCC(ret) && OB_FAIL(AIColumnDML::after_row(op, dml_ctdef, dml_event))) {
+        }
         if (OB_SUCC(ret) && dml_ctdef.trig_ctdef_.all_tm_points_.has_after_row()) {
           ObEvalCtx &eval_ctx = op.get_eval_ctx();
           if (dml_event != t_insert && dml_event != t_update && dml_event != t_delete) {
@@ -2218,6 +2223,9 @@ int ObDMLService::handle_after_processing_single_row(ObDMLModifyRowNode &modify_
       }
     }
     if (OB_SUCC(ret) && OB_FAIL(TriggerHandle::do_handle_after_row(op, dml_ctdef.trig_ctdef_, dml_rtdef.trig_rtdef_, dml_event))) {
+    }
+    if (OB_SUCC(ret)) {
+      ret = AIColumnDML::after_row(op, dml_ctdef, dml_event);
     }
   }
   return ret;

@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/resolver/ddl/ai_column_ddl.h"
 #include "config_bridge.h"
 #include "sql/resolver/ddl/ob_alter_table_resolver.h"
 #include "sql/resolver/expr/ob_raw_expr_part_expr_checker.h"
@@ -147,6 +148,37 @@ int ObAlterTableResolver::resolve(const ParseNode &parse_tree)
       alter_table_stmt->set_table_id(table_schema_->get_table_id());
       alter_table_stmt->get_alter_table_arg().alter_table_schema_.set_charset_type(table_schema_->get_charset_type());
       alter_table_stmt->get_alter_table_arg().alter_table_schema_.set_collation_type(table_schema_->get_collation_type());
+    }
+    // RETRY is a data operation with ALTER syntax. It must stand alone and does
+    // not publish a schema change or enter the ordinary DDL action machinery.
+    if (OB_SUCC(ret) && parse_tree.children_[ACTION_LIST] != nullptr) {
+      const ParseNode &actions = *parse_tree.children_[ACTION_LIST];
+      for (int64_t i = 0; i < actions.num_child_; ++i) {
+        const ParseNode *action = actions.children_[i];
+        if (action == nullptr || action->type_ != T_AI_COLUMN_RETRY) { continue; }
+        if (actions.num_child_ != 1 || action->num_child_ != 2 || action->children_[0] == nullptr) {
+          ret = OB_NOT_SUPPORTED;
+        } else {
+          const ParseNode &name_node = *action->children_[0];
+          const ObColumnSchemaV2 *column = table_schema_->get_column_schema(
+              ObString(name_node.str_len_, name_node.str_value_));
+          if (column == nullptr || !column->is_ai_column()) { ret = OB_NOT_SUPPORTED; }
+          else {
+            alter_table_stmt->ai_retry_column_id_ = column->get_column_id();
+            if (action->children_[1] != nullptr) {
+              const ParseNode &predicate = *action->children_[1];
+              ret = ob_write_string(*allocator_, ObString(predicate.str_len_, predicate.str_value_),
+                                    alter_table_stmt->ai_retry_predicate_);
+            }
+          }
+        }
+        if (ret == OB_NOT_SUPPORTED) {
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, actions.num_child_ != 1
+              ? "combining AI COLUMN RETRY with another ALTER action"
+              : "retrying a column that is not an AI column");
+        }
+        return ret;
+      }
     }
     //resolve action list
     if (OB_SUCCESS == ret && NULL != parse_tree.children_[ACTION_LIST]){
@@ -3453,10 +3485,34 @@ int ObAlterTableResolver::resolve_add_column(const ParseNode &node, ObColumnName
           }
         }
 
+        ObSEArray<ObColumnSchemaV2, 4> ai_hidden;
+        if (OB_SUCC(ret) && alter_column_schema.is_ai_column()) {
+          ObTableSchema definition_table;
+          uint64_t last_id = table_schema_->get_max_used_column_id();
+          const ObTableSchema &changes = alter_table_stmt->get_alter_table_schema();
+          for (int64_t j = 0; j < changes.get_column_count(); ++j) {
+            last_id = MAX(last_id, changes.get_column_schema_by_idx(j)->get_column_id());
+          }
+          alter_column_schema.set_column_id(++last_id);
+          if (OB_FAIL(definition_table.assign(*table_schema_))) {
+          } else if (OB_FAIL(definition_table.add_column(alter_column_schema))) {
+          } else {
+            ret = AIColumnDDL::finalize_column(params_, definition_table, alter_column_schema,
+                                               last_id, ai_hidden);
+          }
+        }
         //add column
         if (OB_SUCC(ret)) {
           if (OB_FAIL(alter_table_stmt->add_column(alter_column_schema))) {
           } else if (FALSE_IT(alter_table_stmt->set_sql_mode(session_info_->get_sql_mode()))) {
+          }
+        }
+        for (int64_t j = 0; OB_SUCC(ret) && j < ai_hidden.count(); ++j) {
+          AlterColumnSchema field;
+          if (OB_FAIL(field.ObColumnSchemaV2::assign(ai_hidden.at(j)))) {
+          } else {
+            field.alter_type_ = OB_DDL_ADD_COLUMN;
+            ret = alter_table_stmt->add_column(field);
           }
         }
       }
@@ -4070,7 +4126,21 @@ int ObAlterTableResolver::resolve_modify_column(const ParseNode &node,
       }
 
       if (OB_SUCC(ret)) {
-        if (OB_FAIL(check_modify_column_allowed(alter_column_schema,
+        if (origin_col_schema->is_ai_column() || alter_column_schema.is_ai_column()) {
+          ObArenaAllocator ai_allocator("AIColumnModify");
+          AIColumnInfo previous(ai_allocator);
+          ObSEArray<ObColumnSchemaV2, 4> hidden;
+          uint64_t last_id = table_schema_->get_max_used_column_id();
+          if (!origin_col_schema->is_ai_column() || !alter_column_schema.is_ai_column()) {
+            ret = OB_NOT_SUPPORTED;
+            LOG_USER_ERROR(OB_NOT_SUPPORTED, "adding or removing AI COLUMN through MODIFY");
+          } else if (OB_FAIL(previous.from_json(origin_col_schema->get_ai_column_info_str()))) {
+          } else {
+            ret = AIColumnDDL::finalize_column(params_, *const_cast<ObTableSchema *>(table_schema_),
+                alter_column_schema, last_id, hidden, &previous);
+          }
+        }
+        if (OB_SUCC(ret) && OB_FAIL(check_modify_column_allowed(alter_column_schema,
                                                 *origin_col_schema, stat))) {
         }
         if (OB_SUCC(ret)) {

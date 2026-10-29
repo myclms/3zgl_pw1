@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/engine/basic/file_sql_reader.h"
+#include "sql/engine/expr/ob_expr_ai/ai_column_evaluation.h"
 #include "sql/resolver/dml/ob_select_resolver.h"
 #include "sql/resolver/dml/ob_del_upd_resolver.h"
 #include "share/ob_time_utility2.h"
@@ -1421,6 +1422,15 @@ int ObSelectResolver::resolve_field_list(const ParseNode &node)
         sel_expr = static_cast<ObExecParamRawExpr *>(sel_expr)->get_ref_expr();
         if (OB_ISNULL(sel_expr)) {
           ret = OB_ERR_UNEXPECTED;
+        }
+      }
+
+      if (OB_SUCC(ret) && AIColumnEvaluationScope::active()) {
+        if (OB_FAIL(AIColumnEvaluationScope::convert_result(*params_.expr_factory_,
+                                                           *session_info_, select_item.expr_))) {
+        } else if (OB_FAIL(select_item.expr_->formalize(session_info_))) {
+        } else {
+          sel_expr = select_item.expr_;
         }
       }
 

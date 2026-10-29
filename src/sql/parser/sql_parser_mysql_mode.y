@@ -421,6 +421,8 @@ END_P SET_VAR DELIMITER
 %type <node> opt_equal_mark opt_default_mark read_only_or_write not not2
 %type <node> int_or_decimal
 %type <node> opt_column_attribute_list column_attribute column_attribute_list opt_column_default_value opt_column_default_value_list
+%token <non_reserved_keyword> RETRY
+%type <node> ai_column_options ai_column_option_list ai_column_option ai_retry_predicate
 %type <node> show_stmt from_or_in columns_or_fields database_or_schema index_or_indexes_or_keys opt_from_or_in_database_clause opt_show_condition opt_desc_column_option opt_status opt_storage opt_show_engine check_table_options check_table_option
 %type <node> prepare_stmt stmt_name preparable_stmt
 %type <node> variable_set_stmt var_and_val_list var_and_val to_or_eq set_expr_or_default sys_var_and_val
@@ -6142,6 +6144,12 @@ column_attribute_list column_attribute
 }
 
 column_attribute:
+AI COLUMN '(' expr ')' ai_column_options
+{
+  dup_expr_string($4, result, @4.first_column, @4.last_column);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN, 2, $4, $6);
+}
+|
 not NULLX
 {
   (void)($1) ;
@@ -6241,6 +6249,29 @@ not NULLX
 | INVISIBLE
 {
   malloc_terminal_node($$, result->malloc_pool_, T_INVISIBLE);
+}
+;
+
+ai_column_options:
+/*empty*/ { $$ = NULL; }
+| WITH '(' ai_column_option_list ')'
+{
+  merge_nodes($$, result, T_AI_COLUMN_OPTIONS, $3);
+}
+;
+
+ai_column_option_list:
+ai_column_option { $$ = $1; }
+| ai_column_option_list ',' ai_column_option
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_LINK_NODE, 2, $1, $3);
+}
+;
+
+ai_column_option:
+column_name COMP_EQ expr
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_OPTION, 2, $1, $3);
 }
 ;
 
@@ -12702,6 +12733,12 @@ CLASS_ORIGIN
  *
  *****************************************************************************/
 show_stmt:
+SHOW AI COLUMNS from_or_in relation_factor opt_from_or_in_database_clause
+{
+  (void)$4;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_SHOW_AI_COLUMNS, 2, $5, $6);
+}
+|
 SHOW opt_extended_or_full TABLES opt_from_or_in_database_clause opt_show_condition
 {
   ParseNode *value = NULL;
@@ -14769,6 +14806,11 @@ alter_table_action
 ;
 
 alter_table_action:
+RETRY AI COLUMN column_name ai_retry_predicate
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 2, $4, $5);
+}
+|
 opt_set table_option_list_space_seperated
 {
   (void)$1;
@@ -14825,6 +14867,15 @@ DEFAULT { $$ = NULL; }
 | INPLACE { $$ = NULL; }
 | COPY { $$ = NULL; }
 | INSTANT { $$ = NULL; }
+;
+
+ai_retry_predicate:
+/* EMPTY */ { $$ = NULL; }
+| WHERE expr
+{
+  $$ = $2;
+  dup_expr_string($$, result, @2.first_column, @2.last_column);
+}
 ;
 
 lock_opt:
@@ -18064,6 +18115,7 @@ ACCOUNT
 |       RETURNING
 |       RETURNS
 |       REVERSE
+|       RETRY
 |       REWRITE
 |       ROLE
 |       ROLLBACK

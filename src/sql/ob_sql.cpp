@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL
+#include "sql/engine/dml/ai_column_sql.h"
 #include "config_bridge.h"
 #include "sql/ob_sql.h"
 #include "lib/json/ob_json_print_utils.h"
@@ -2653,6 +2654,7 @@ int ObSql::transform_stmt(ObSqlSchemaGuard *sql_schema_guard,
   ObSchemaChecker schema_checker;
 
   if (OB_FAIL(ret)) {
+  } else if (phy_plan != nullptr && OB_FAIL(AIColumnSQL::collect_references(*transform_stmt, *phy_plan))) {
   } else if (OB_FAIL(schema_checker.init(*sql_schema_guard))) {
   } else {
     trans_ctx.allocator_ = &exec_ctx.get_allocator();

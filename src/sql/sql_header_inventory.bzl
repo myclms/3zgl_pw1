@@ -1,6 +1,8 @@
 """Native public/private header ownership for the SQL module."""
 
 SQL_PUBLIC_HEADER_ROOTS = [
+    "engine/dml/ai_column_sql.h",
+    "engine/expr/ob_expr_ai/ai_column_evaluation.h",
     "code_generator/ob_expr_generator_impl.h",
     "code_generator/ob_static_engine_expr_cg.h",
     "das/iter/ob_das_iter.h",
@@ -127,6 +129,8 @@ SQL_PUBLIC_HEADER_ROOTS = [
     "resolver/ddl/ob_create_index_resolver.h",
     "resolver/ddl/ob_create_view_resolver.h",
     "resolver/ddl/ob_ddl_resolver.h",
+    "resolver/ddl/ai_column_ddl.h",
+    "engine/dml/ai_column_dml.h",
     "resolver/ddl/ob_fts_index_builder_util.h",
     "resolver/ddl/ob_index_builder_util.h",
     "resolver/ddl/ob_trigger_source_builder.h",

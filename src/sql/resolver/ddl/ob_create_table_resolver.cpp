@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/resolver/ddl/ai_column_ddl.h"
 #include "sql/resolver/ddl/ob_create_table_resolver.h"
 #include "sql/resolver/dml/ob_select_resolver.h"
 #include "sql/resolver/ddl/ob_fts_index_builder_util.h"
@@ -949,6 +950,9 @@ int ObCreateTableResolver::resolve_table_elements(const ParseNode *node,
       // todo@lanyi This function should be placed in a separate document
       } else if (OB_FAIL(resolve_primary_key_node_in_heap_table(primary_node_in_heap_table, stats, resolved_cols))) {
       }
+    }
+    if (OB_SUCC(ret) && RESOLVE_NON_COL != resolve_rule) {
+      ret = AIColumnDDL::finalize_table(params_, table_schema, cur_column_id_);
     }
   }
   return ret;

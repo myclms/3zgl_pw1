@@ -342,7 +342,8 @@ all_column_def = dict(
       ('sub_data_type', 'int', 'false', '0'),
       ('skip_index_attr', 'int', 'false', '0'),
       ('lob_chunk_size', 'int', 'false', 'OB_DEFAULT_LOB_CHUNK_SIZE'),
-      ('local_session_vars', 'longtext', 'true')
+      ('local_session_vars', 'longtext', 'true'),
+      ('ai_column_info', 'longtext', 'true')
   ]
   )
 
@@ -2446,6 +2447,22 @@ all_ai_model_endpoint_def = dict(
 )
 def_table_schema(**all_ai_model_endpoint_def)
 
+# Durable asynchronous work, committed in the same transaction as the user row.
+def_table_schema(
+    owner = 'seekdb', table_name = '__all_ai_column_task', table_id = '1131',
+    table_type = 'SYSTEM_TABLE', gm_columns = ['gmt_create', 'gmt_modified'],
+    rowkey_columns = [('table_id', 'int'), ('request_id', 'varchar:64'), ('column_id', 'int')],
+    is_cluster_private = False, meta_record_in_sys = False,
+    normal_columns = [
+        ('rowkey_predicate', 'longtext', 'false'),
+        ('definition_version', 'int', 'false', '1'),
+        ('state', 'int', 'false', '0'),
+        ('retry_count', 'int', 'false', '0'),
+        ('eligible_ts', 'timestamp:6', 'false'),
+        ('owner', 'varchar:64', 'false', ''),
+        ('lease_until', 'timestamp:6', 'true'),
+        ('result_payload', 'longtext', 'true'),
+        ('last_error', 'int', 'false', '0')])
 
 all_objauth_mysql_def = dict(
     owner = 'cjl476581',
@@ -13869,6 +13886,27 @@ def_table_schema(
 # Reserved position (placeholder before this line)
 # Placeholder suggestion for this section: Use the actual view name for placeholder
 ################################################################################
+# Definitions are persisted with __all_column, so CREATE/ALTER/DROP and schema
+# refresh never observe a definition separately from its physical columns.
+def_table_schema(
+    owner = 'seekdb', table_name = '__all_ai_column', table_id = '21669',
+    table_type = 'SYSTEM_VIEW', gm_columns = [], rowkey_columns = [], normal_columns = [],
+    view_definition = """
+    SELECT c.table_id, c.column_id, c.column_name,
+      JSON_UNQUOTE(JSON_EXTRACT(c.ai_column_info, '$.expression')) AS expression,
+      JSON_UNQUOTE(JSON_EXTRACT(c.ai_column_info, '$.normalized_expr')) AS normalized_expr,
+      JSON_EXTRACT(c.ai_column_info, '$.dependencies') AS dependency_column_ids,
+      CAST(JSON_EXTRACT(c.ai_column_info, '$.state_column_id') AS SIGNED) AS state_column_id,
+      CAST(JSON_EXTRACT(c.ai_column_info, '$.request_column_id') AS SIGNED) AS request_column_id,
+      CAST(JSON_EXTRACT(c.ai_column_info, '$.result_spec_column_id') AS SIGNED) AS result_spec_column_id,
+      CAST(JSON_EXTRACT(c.ai_column_info, '$.definition_version') AS SIGNED) AS definition_version,
+      CAST(JSON_EXTRACT(c.ai_column_info, '$.max_retries') AS SIGNED) AS max_retries,
+      'async' AS sync_mode
+    FROM oceanbase.__all_column c
+    WHERE c.ai_column_info IS NOT NULL AND c.ai_column_info <> ''
+    """.replace('\n', ' '))
+
+
 # End of MySQL System View (20000, 25000]
 ################################################################################
 ################################### Placeholder Notice ###################################

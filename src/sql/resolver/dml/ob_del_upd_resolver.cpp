@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/engine/dml/ai_column_dml.h"
 #include "ob_del_upd_resolver.h"
 #include "sql/resolver/dml/ob_default_value_utils.h"
 #include "sql/resolver/dml/ob_update_stmt.h"
@@ -481,6 +482,57 @@ int ObDelUpdResolver::check_update_vector_col_with_vector_index(const ObTableSch
   return ret;
 }
 
+int ObDelUpdResolver::resolve_ai_column_assignments(ObIArray<ObTableAssignment> &assigns,
+                                                   int64_t table_index, const TableItem &table,
+                                                   const ObTableSchema &schema)
+{
+  int ret = OB_SUCCESS;
+  ObArenaAllocator allocator("AIColumnDML");
+  for (int64_t i = 0; OB_SUCC(ret) && i < schema.get_column_count(); ++i) {
+    const ObColumnSchemaV2 &column = *schema.get_column_schema_by_idx(i);
+    if (!column.is_ai_column()) {
+      continue;
+    }
+    AIColumnInfo info(allocator);
+    if (OB_FAIL(info.from_json(column.get_ai_column_info_str()))) {
+    } else {
+      const uint64_t ids[] = {column.get_column_id(), info.state_column_id_,
+                              info.request_column_id_, info.result_spec_column_id_};
+      for (uint64_t id : ids) {
+        if (OB_FAIL(ret)) { break; }
+        bool assigned = false;
+        for (int64_t j = 0; !assigned && j < assigns.at(table_index).assignments_.count(); ++j) {
+          assigned = assigns.at(table_index).assignments_.at(j).column_expr_->get_column_id() == id;
+        }
+        if (!assigned) {
+          const ObColumnSchemaV2 *field = schema.get_column_schema(id);
+          ObSEArray<ObColumnRefRawExpr *, 1> expressions;
+          if (field == nullptr) {
+            ret = OB_ERR_UNEXPECTED;
+          } else if (OB_FAIL(add_column_to_stmt(table, *field, expressions))) {
+          } else if (expressions.count() != 1) {
+            ret = OB_ERR_UNEXPECTED;
+          } else {
+            ObAssignment assignment;
+            assignment.column_expr_ = expressions.at(0);
+            assignment.expr_ = expressions.at(0);
+            assignment.is_implicit_ = true;
+            ColumnItem *item = get_stmt()->get_column_item_by_id(table.table_id_, id);
+            if (item == nullptr) {
+              ret = OB_ERR_UNEXPECTED;
+            } else if (OB_FAIL(ObRawExprUtils::build_column_conv_expr(*params_.expr_factory_,
+                                  *params_.allocator_, *item->get_expr(), assignment.expr_, session_info_))) {
+            } else {
+              ret = add_assignment(assigns, &table, item, assignment);
+            }
+          }
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObDelUpdResolver::resolve_additional_assignments(ObIArray<ObTableAssignment> &assigns,
                                                      const ObStmtScope scope)
 {
@@ -511,6 +563,7 @@ int ObDelUpdResolver::resolve_additional_assignments(ObIArray<ObTableAssignment>
     } else if (OB_ISNULL(table_schema)) {
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("fail to get table schema", KPC(table_item), K(table_schema));
+    } else if (OB_FAIL(resolve_ai_column_assignments(assigns, i, *table_item, *table_schema))) {
     } else if (OB_FAIL(table_schema->has_before_update_row_trigger(*schema_guard, trigger_exist))) {
     } else if (OB_FAIL(generate_wrapper_expr_for_assignemnts(assigns.at(i).assignments_, trigger_exist))) {
     } else if (OB_FAIL(check_update_vector_col_with_vector_index(table_schema,
@@ -1098,7 +1151,7 @@ bool ObDelUpdResolver::need_all_columns(const ObTableSchema &table_schema,
                                         const int64_t binlog_row_image)
 {
   // Returns true for MINIMAL too because the optimizer currently needs full rows.
-  return (table_schema.is_table_without_pk() ||
+  return (has_ai_columns(table_schema) || table_schema.is_table_without_pk() ||
           table_schema.get_foreign_key_infos().count() > 0 ||
           table_schema.get_trigger_list().count() > 0 ||
           table_schema.has_check_constraint() ||
@@ -2009,7 +2062,8 @@ int ObDelUpdResolver::build_column_conv_function_with_default_expr(ObInsertTable
                                                                   *params_.allocator_,
                                                                   *column_item->get_expr(),
                                                                   expr, session_info_))) {
-        } else if (trigger_exist &&
+        } else if ((trigger_exist || col_schema->is_ai_column()
+                    || (col_schema->is_hidden() && has_ai_columns(*table_schema))) &&
                   OB_FAIL(ObRawExprUtils::build_wrapper_inner_expr(*params_.expr_factory_, *session_info_, expr, expr))) {
         } else {
           function_expr = expr;
