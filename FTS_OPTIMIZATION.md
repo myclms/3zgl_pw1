@@ -212,3 +212,44 @@ The four-query category improved **12.233% in A and 13.147% in B**, averaging **
 Across all three equally weighted categories the raw local reductions were 4.461% and 9.101% (mean 6.781%). Tokenizer code was not changed in this step: its larger apparent improvement in B, along with SELECT 1 variation, is machine/run variation and is not attributed to score elision. No consistent build-time improvement is claimed. The query category is the reproducible gain; this local result does not predict a platform score or establish the 50% overall reduction needed for full points.
 
 Raw reports are `unittest/storage/fts/results/local-20261029-membership-*-report.txt`. Report Git metadata is the dirty validation checkout at `ad3d2956`; binaries were selected explicitly. The reference executable was saved from that evaluated implementation, while the candidate executable was rebuilt from the seven changed production files.
+
+## Dictionary character lookup (2026-10-29)
+
+The repository owner supplied the subsequent official result for `77ac24de`: **17.966/50**, mean improvement `0.17966377053918248`. The complete supplied metrics are retained in `unittest/storage/fts/results/platform-20261029-1617-77ac24de.json`. This is the evaluated control for this step. The scoring contract, remaining gap and larger optimization candidates are documented in `FTS_SCORE50_ANALYSIS.md`.
+
+Actual TOKENIZE CPU sampling identified `ObArrayHashMap::find` and `ObFTDATReader::match_with_hit` as IK dictionary hotspots. The reader now queries with the original character view, omitting the temporary `ObFTSingleWord` copy. Dictionary code maps use a power-of-two capacity and masks for initial placement and collision probing. The existing stride of three then visits every bucket; insert and find use the same hash and probe sequence. Word bytes, assigned character codes and trie matching semantics are unchanged.
+
+Rounding capacity upward can increase the code-map allocation to almost twice its previous size. This does not double the complete trie allocation, but the memory tradeoff matters on larger dictionaries. The complete local tests below used the same 4 GiB limit as the control. No unbounded cache or input-specific result cache is added.
+
+### Validation
+
+- The changed production unity translation unit compiled with the Release build's Clang 17 flags and the server linked against the existing unchanged libraries.
+- All four FTS CTest targets passed, including the new `test_fts_dictionary_lookup`. It covers random keys of every supported byte length, embedded NULs, packed/unaligned storage, capacity boundaries, missing keys, deliberately colliding keys and repeated wraparound.
+- The new unit also passed ASan/UBSan, with its test and dictionary sources instrumented and the existing dependency libraries uninstrumented.
+- Native mysqltest passed `hot_path_equivalence`, `tokenize_function` and `simple_query` against the final candidate.
+- Complete TOKENIZE arrays, spellings, frequencies, document lengths, matching IDs and exact relevance values matched the fresh control on both candidate runs. The second candidate also matched all 154 membership, numeric-score, prepared-statement, concurrent-query, DML and rollback result sets.
+
+The first snapshot reference had been collected after multiple database rebuilds for profiling. Its BM25 values differed slightly from those on fresh instances, including BENG, whose tokenizer was not changed. A fresh run of the *unchanged control executable* reproduced the candidate values exactly and differed from that first reference. The two fresh control/candidate comparisons therefore use matching fresh-instance state and retain exact numerical comparison, without tolerances. The discarded cross-state comparison is not presented as a passing check.
+
+### Measurements
+
+The focused native benchmark used 2,000 three-byte UTF8 keys, identical entries and capacity for the reference/candidate algorithms, six samples with alternating order, and CPU 15. No compilation ran during timing. Median lookup time decreased from **19.778 ns to 12.824 ns (35.16%)**; all checksums were identical. These numbers isolate lookup work, not complete parser or SQL time.
+
+Two complete official benchmark pairs used fresh instances, CPUs 0–3, memory 4G, cpu_count 4, datafile 512M, log disk 2G and ERROR logging. Rows/batch/rounds/query rounds/samples/warmup were unchanged at 20000/500/3000/200/3/30, with SKIP_LOAD=0. Both pairs ran control first; order was not counterbalanced. No compilation or CPU sampling ran during these timings.
+
+| Metric | A control | A candidate | B control | B candidate |
+| --- | ---: | ---: | ---: | ---: |
+| SELECT 1, ms | 0.1330 | 0.1075 | 0.1088 | 0.1026 |
+| Build IK title/content, s | 9.612 | 9.609 | 9.822 | 9.710 |
+| Build IK content, s | 7.488 | 7.378 | 7.482 | 7.271 |
+| Build BENG, s | 4.069 | 3.958 | 3.978 | 3.950 |
+| TOKENIZE IK, ms | 0.2070 | 0.1953 | 0.1947 | 0.1923 |
+| TOKENIZE BENG, ms | 0.1442 | 0.1366 | 0.1342 | 0.1361 |
+| MATCH Chinese, ms | 1.3702 | 1.3559 | 1.3248 | 1.3440 |
+| MATCH BENG, ms | 1.9587 | 1.9358 | 1.9610 | 1.9542 |
+| MATCH mixed, ms | 1.7213 | 1.5069 | 1.5091 | 1.5771 |
+| MATCH LIMIT, ms | 3.0636 | 2.5421 | 2.5548 | 2.9372 |
+
+The build category decreased 1.41% / 1.55%, and IK TOKENIZE decreased 5.65% / 1.23%. BENG and SELECT 1 also moved, although their implementation was unchanged. Query timings moved in both directions, including a 14.97% LIMIT regression in B. Across all three categories the local mean reductions were **4.93% and -1.23%**; these runs do not establish a consistent overall SQL improvement, explain all query variation, or predict platform points. All four reports retained hit counts 8001 / 11000 / 7332 / 20.
+
+Raw reports, the native lookup measurements and the build-profile summary are retained as `local-20261029-lookup-*` in `unittest/storage/fts/results/`. Their Git metadata comes from the dirty validation checkout at `77ac24de`; binaries were selected explicitly. The official benchmark, data generator, SQL, timer, scorer and baseline were not modified. A new platform evaluation is required to decide whether this tradeoff improves the competition score.

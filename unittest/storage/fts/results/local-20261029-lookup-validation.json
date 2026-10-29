@@ -1,0 +1,37 @@
+{
+  "reference_commit": "77ac24de36255fd337af6ecc08676fdbff91a1d5",
+  "build": "Changed production unity translation unit compiled with Release Clang 17 flags; archive and server relinked using unchanged dependency libraries.",
+  "ctest": {
+    "passed": 4,
+    "failed": 0,
+    "targets": [
+      "test_fts_hot_path",
+      "test_fts_word_grouping",
+      "test_fts_docid_compare",
+      "test_fts_dictionary_lookup"
+    ]
+  },
+  "sanitizers": {
+    "test_fts_dictionary_lookup": "ASan and UBSan passed; test and dictionary sources instrumented, existing dependency libraries uninstrumented"
+  },
+  "mysqltest": {
+    "hot_path_equivalence": "passed",
+    "tokenize_function": "passed",
+    "simple_query": "passed"
+  },
+  "exact_full_snapshots": {
+    "candidate_a": "matches fresh control_b in all 43 sections",
+    "candidate_b": "matches fresh control_b in all 43 sections"
+  },
+  "membership_snapshot": {
+    "sets": 154,
+    "result": "candidate_b matches fresh control_b exactly, including concurrent queries"
+  },
+  "cross_state_reference": "Initial reference collected after repeated rebuilds differed in BM25 values from fresh control and candidate alike; excluded from correctness comparison. Exact comparison retained without tolerance.",
+  "official_benchmark_modified": false,
+  "performance_limitations": "Lookup microbenchmark improves; whole-SQL mean reduction changes sign between pairs. Both pairs ran control first. No platform score prediction.",
+  "source_sha256": {
+    "src/storage/fts/dict/ob_ft_dat_dict.h": "0d522fac79cab089bf94254b79d9f64498cb5775913107e2a0a077efea389594",
+    "src/storage/fts/dict/ob_ft_dat_dict.cpp": "16ef5ebeff91923ea3265fc3b3857a2b89e4db5a8e706353ca0527d8061b7b54"
+  }
+}
