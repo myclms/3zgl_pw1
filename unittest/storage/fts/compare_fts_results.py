@@ -6,6 +6,7 @@ Run the unchanged official benchmark first, then capture a baseline with
 --reference before.json --output after.json. Timing is not measured here.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 
@@ -69,6 +70,25 @@ def snapshot(connection):
                 cursor.execute("SELECT TOKENIZE(CAST(%s AS CHAR CHARACTER SET utf8mb4), %s) AS tokens",
                                (document, parser))
                 results["defaults"].append(json.loads(cursor.fetchone()[0]))
+        # Stopword comparisons use utf8mb4_general_ci after conversion even
+        # when the input itself has a binary/case-sensitive collation. Cover
+        # accent folding and the conversion path as well as ordinary UTF8.
+        results["stopword_collations"] = []
+        for charset, collation in (
+            ("utf8mb4", "utf8mb4_general_ci"), ("utf8mb4", "utf8mb4_bin"),
+            ("latin1", "latin1_swedish_ci"), ("gbk", "gbk_chinese_ci"),
+        ):
+            for parser in ("beng", "space"):
+                for text in ("the THE with with database", "thé thé database", "for from audit", "www com performance"):
+                    try:
+                        cursor.execute(
+                            f"SELECT TOKENIZE(CONVERT(%s USING {charset}) COLLATE {collation}, %s, %s)",
+                            (text, parser, '[{"output":"all"}]'))
+                    except pymysql.MySQLError as error:
+                        # Reduced builds may not enable the legacy charset.
+                        results["stopword_collations"].append({"error": error.args[0]})
+                    else:
+                        results["stopword_collations"].append(json.loads(cursor.fetchone()[0]))
         cursor.execute("SELECT TOKENIZE(title, CASE WHEN MOD(id,2)=0 THEN 'beng' ELSE 'ik' END, "
                        "CASE WHEN MOD(id,3)=0 THEN '[{\"output\":\"all\"}]' ELSE '[{}]' END) AS tokens "
                        "FROM docs ORDER BY id LIMIT 100")
@@ -125,6 +145,29 @@ def snapshot(connection):
     return results
 
 
+def check_parallel_segmentation(socket):
+    # Different SQL workers must keep their word maps and frequencies isolated.
+    # Compare each concurrent result with the same statement on an idle session.
+    def capture(worker):
+        connection = pymysql.connect(unix_socket=socket, user="root", charset="utf8mb4", autocommit=True)
+        try:
+            with connection.cursor() as cursor:
+                result = []
+                for parser in ("ik", "beng", "space", "ngram"):
+                    cursor.execute("SELECT TOKENIZE(%s,%s,%s)", (
+                        (f"worker{worker} 数据库 DATABASE caféx cafex " * (worker + 1)),
+                        parser, '[{"output":"all"}]'))
+                    result.append(json.loads(cursor.fetchone()[0]))
+                return result
+        finally:
+            connection.close()
+
+    expected = [capture(worker) for worker in range(8)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        actual = list(pool.map(capture, range(8)))
+    assert actual == expected, "Concurrent tokenization changed complete outputs/frequencies"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True)
@@ -139,6 +182,7 @@ def main():
         actual = snapshot(connection)
     finally:
         connection.close()
+    check_parallel_segmentation(args.socket)
     args.output.write_text(json.dumps(actual, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if args.reference:
         expected = json.loads(args.reference.read_text(encoding="utf-8"))

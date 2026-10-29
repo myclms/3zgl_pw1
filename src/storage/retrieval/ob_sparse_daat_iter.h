@@ -58,6 +58,8 @@ private:
   //       and avoid deep copy into merge heap here
   const ObFixedArray<const ObDatum *, ObIAllocator> *iter_ids_;
   bool is_inited_;
+  bool uint_id_;
+  bool binary_id_;
 };
 
 typedef ObSimpleRowsMerger<ObSRMergeItem, ObSRMergeCmp> ObSRSimpleMerger;

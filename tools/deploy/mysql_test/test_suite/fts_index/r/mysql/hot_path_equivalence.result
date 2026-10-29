@@ -26,3 +26,9 @@ tokens
 SELECT TOKENIZE('caféx cafex', 'space', '[{"output":"all"}]') AS tokens;
 tokens
 {"tokens": [{"cafex": 2}], "doc_len": 2}
+SELECT TOKENIZE(_utf8mb4'thé THE with WITH database' COLLATE utf8mb4_bin, 'beng', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 1}], "doc_len": 1}
+SELECT TOKENIZE(_utf8mb4'thé THE with WITH database' COLLATE utf8mb4_general_ci, 'space', '[{"output":"all"}]') AS tokens;
+tokens
+{"tokens": [{"database": 1}], "doc_len": 1}
